@@ -1,6 +1,7 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
 # Copyright (c) 2012 NTT DOCOMO, INC.
+# Copyright 2013 National Institute of Informatics.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -55,6 +56,10 @@ class BareMetalNode(BASE, models.NovaBase):
     deploy_key = Column(String(255), nullable=True)
     root_mb = Column(Integer)
     swap_mb = Column(Integer)
+    host_name = Column(String(255))
+    instance_type_id = Column(Integer)
+    prov_ip_address = Column(String(255))
+    resource_pool = Column(Boolean, default=False)
 
 
 class BareMetalPxeIp(BASE, models.NovaBase):

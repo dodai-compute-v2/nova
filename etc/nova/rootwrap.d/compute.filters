@@ -199,3 +199,9 @@ systool: CommandFilter, /usr/bin/systool, root
 # nova/virt/libvirt/volume.py:
 sginfo: CommandFilter, /usr/bin/sginfo, root
 sg_scan: CommandFilter, /usr/bin/sg_scan, root
+
+# nova/virt/baremetal/dodai_os_install_manager.py
+rsync: CommandFilter, /usr/bin/rsync, root
+
+# nova/virt/baremetal/dodai_os_install_manager.py: 'kill', '-9', pid
+kill_rsync: KillFilter, root, /usr/bin/rsync, -9, -HUP

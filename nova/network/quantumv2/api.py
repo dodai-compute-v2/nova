@@ -1,6 +1,7 @@
 # Copyright 2012 OpenStack Foundation
 # All Rights Reserved
 # Copyright (c) 2012 NEC Corporation
+# Copyright 2013 National Institute of Informatics.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -147,7 +148,7 @@ class API(base.Base):
             # Make a copy we can mutate: records macs that have not been used
             # to create a port on a network. If we find a mac with a
             # pre-allocated port we also remove it from this set.
-            available_macs = set(hypervisor_macs)
+            available_macs = hypervisor_macs[:]
         quantum = quantumv2.get_client(context)
         LOG.debug(_('allocate_for_instance() for %s'),
                   instance['display_name'])
@@ -172,7 +173,8 @@ class API(base.Base):
                             # port on the fly later. Identical MACs may be
                             # configured by users into multiple ports so we
                             # discard rather than popping.
-                            available_macs.discard(port['mac_address'])
+                            while port['mac_address'] in available_macs:
+                                available_macs.remove(port['mac_address'])
                     network_id = port['network_id']
                     ports[network_id] = port
                 elif fixed_ip and network_id:
@@ -255,7 +257,7 @@ class API(base.Base):
                         if not available_macs:
                             raise exception.PortNotFree(
                                 instance=instance['display_name'])
-                        mac_address = available_macs.pop()
+                        mac_address = available_macs.pop(0)
                         port_req_body['port']['mac_address'] = mac_address
 
                     self._populate_quantum_extension_values(instance,

@@ -2,6 +2,7 @@
 
 # Copyright (c) 2012 NTT DOCOMO, INC.
 # Copyright 2010 OpenStack Foundation
+# Copyright 2013 National Institute of Informatics.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -33,5 +34,8 @@ BUILDING = 'building'
 DEPLOYING = 'deploying'
 DEPLOYFAIL = 'deploy failed'
 DEPLOYDONE = 'deploy complete'
+DELETING = 'deleting'
+DELETEFAIL = 'delete failed'
+DELETEDONE = 'delete complete'
 DELETED = 'deleted'
 ERROR = 'error'

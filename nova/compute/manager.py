@@ -3,6 +3,7 @@
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # Copyright 2011 Justin Santa Barbara
+# Copyright 2013 National Institute of Informatics.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -38,6 +39,9 @@ import uuid
 
 from eventlet import greenthread
 from oslo.config import cfg
+
+from keystoneclient.v2_0 import client as keystone_client
+from novaclient.v1_1 import client as nova_client
 
 from nova import block_device
 from nova.cells import rpcapi as cells_rpcapi
@@ -166,11 +170,30 @@ running_deleted_opts = [
                     "instance should be considered eligible for cleanup."),
 ]
 
+baremetal_opts = [
+    cfg.StrOpt('resource_pool_instance_name',
+               default='resource pool',
+               help="The name that identifies an instance for resource pool."),
+    cfg.StrOpt('resource_pool_network_name',
+               default='resource pool',
+               help="The name that identifies a network for resource pool."),
+]
+
+keystone_opts = [
+    cfg.StrOpt('username', help=_("Keystone user")),
+    cfg.StrOpt('password', help=_("Keystone password"),
+               secret=True),
+    cfg.StrOpt('tenant_name', help=_("Admin tenant name")),
+    cfg.StrOpt('auth_url', help=_("Authentication URL")),
+]
+
 CONF = cfg.CONF
 CONF.register_opts(compute_opts)
 CONF.register_opts(interval_opts)
 CONF.register_opts(timeout_opts)
 CONF.register_opts(running_deleted_opts)
+CONF.register_opts(baremetal_opts, 'baremetal')
+CONF.register_opts(keystone_opts, 'keystone')
 CONF.import_opt('allow_resize_to_same_host', 'nova.compute.api')
 CONF.import_opt('console_topic', 'nova.console.rpcapi')
 CONF.import_opt('host', 'nova.netconf')
@@ -4057,3 +4080,100 @@ class ComputeManager(manager.SchedulerDependentManager):
                 filtered_instances.append(instance)
 
         self.driver.manage_image_cache(context, filtered_instances)
+
+    @manager.periodic_task
+    def _recreate_instance_as_resource_pool(self, context):
+        LOG.debug("#_recreate_instance_as_resource_pool() called.")
+        from nova.virt.baremetal import db as bmdb
+        from nova.virt.baremetal import baremetal_states
+        context = context.elevated(read_deleted='no')
+        nodes = bmdb.bm_node_get_all(context)
+        deleted_nodes = [node for node in nodes
+                             if node['task_state'] == baremetal_states.DELETED]
+        for node in deleted_nodes:
+            context = context.elevated(read_deleted='yes')
+            filters = {'deleted': True,
+                       'node': node['uuid']}
+            instances = self.conductor_api.instance_get_all_by_filters(
+                        context, filters)
+            if not instances:
+                LOG.debug("Deleted instance %s was not found in the database. "
+                          "skipping..." % node['uuid'])
+                continue
+            # pick up the last deleted one
+            sorted(instances, key=lambda x: x['deleted_at'])
+            instance = instances[0]
+            LOG.info(_("Recreating deleted instance %s as resource pool.")
+                       % instance['uuid'])
+
+            # set user as admin
+            _set_admin_data(context)
+            instance_name = CONF.baremetal.resource_pool_instance_name
+            instance_type = self.virtapi.instance_type_get(context,
+                    instance['instance_type_id'])
+            # use a default image
+            image_id = instance_type['extra_specs'].get(
+                'baremetal:default_image')
+            # nics should be specified as a sigle dummy network
+            nics = None
+            if hasattr(self.network_api, '_get_available_networks'):
+                nets = self.network_api._get_available_networks(context,
+                            context.project_id)
+                resource_pool_nets = [net for net in nets
+                            if net['name'] == \
+                                CONF.baremetal.resource_pool_network_name]
+                if resource_pool_nets:
+                    nics = [{'net-id': resource_pool_nets[0]['id']}]
+            if nics is None:
+                LOG.warn("No available network for resource pool found.")
+                return
+            bmdb.bm_node_update(context, node['id'],
+                                {'task_state': baremetal_states.INIT})
+            _get_nova_client().servers.create(instance_name,
+                     image_id, instance_type['flavorid'],
+                     meta=None, files=None,
+                     reservation_id=None, min_count=None,
+                     max_count=None, security_groups=None, userdata=None,
+                     key_name=None, availability_zone=None,
+                     block_device_mapping=None, nics=nics,
+                     scheduler_hints=None, config_drive=None)
+
+
+def _set_admin_data(context):
+    LOG.debug("#_set_admin_data() context=%s" % context)
+    username = CONF.keystone.username
+    password = CONF.keystone.password
+    tenant_name = CONF.keystone.tenant_name
+    auth_url = CONF.keystone.auth_url
+    try:
+        kc = keystone_client.Client(
+                 username=username,
+                 password=password,
+                 tenant_name=tenant_name,
+                 auth_url=auth_url)
+        token = kc.tokens.authenticate(username=username,
+                                       tenant_name=tenant_name,
+                                       password=password)
+        context.auth_token = token.token['id']
+        context.user_id = token.user['id']
+        context.project_id = token.token['tenant']['id']
+    except Exception as e:
+        LOG.error(str(e))
+        raise e
+
+
+def _get_nova_client():
+    username = CONF.keystone.username
+    password = CONF.keystone.password
+    tenant_name = CONF.keystone.tenant_name
+    auth_url = CONF.keystone.auth_url
+    try:
+        nc = nova_client.Client(username,
+                                password,
+                                tenant_name,
+                                auth_url,
+                                no_cache=True)
+        return nc
+    except Exception as e:
+        LOG.error(str(e))
+        raise e
