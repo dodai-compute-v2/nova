@@ -1,0 +1,9 @@
+pid file = ${rsync_options.pid_file}
+use chroot = yes
+read only = yes
+uid = root
+gid = root
+[${rsync_options.image_uuid}]
+   path = ${rsync_options.path}
+   hosts allow = ${rsync_options.hosts_allow}
+   hosts deny = *

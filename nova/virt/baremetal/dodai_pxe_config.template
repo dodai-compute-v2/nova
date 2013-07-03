@@ -1,0 +1,9 @@
+default deploy
+
+label deploy
+kernel ${pxe_options.deployment_aki_path}
+append initrd=${pxe_options.deployment_ari_path} selinux=0 disk=cciss/c0d0,sda,hda,vda root_size=${pxe_options.root_size} swap_size=${pxe_options.swap_size} ephemeral_size=${pxe_options.ephemeral_size} kdump_size=${pxe_options.kdump_size} ami_path=${pxe_options.ami_path} prov_ip_address=${pxe_options.prov_ip_address} prov_mac_address=${pxe_options.prov_mac_address} host_name=${pxe_options.host_name} root_fs_type=${pxe_options.root_fs_type} agent_bind_port=${pxe_options.agent_bind_port} agent_bind_subport=${pxe_options.agent_bind_subport}  agent_config=${pxe_options.agent_config} prov_subnet=${pxe_options.prov_subnet} action=${pxe_options.action} injection_scripts_path=${pxe_options.injection_scripts_path} deletion_scripts_path=${pxe_options.deletion_scripts_path} ${pxe_options.pxe_append_params}
+ipappend 3
+
+label boot
+localboot -1
