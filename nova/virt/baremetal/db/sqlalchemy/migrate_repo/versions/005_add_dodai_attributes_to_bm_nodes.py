@@ -25,8 +25,12 @@ def upgrade(migrate_engine):
     host_name = Column('host_name', String(255))
     instance_type_id = Column('instance_type_id', Integer)
     prov_ip_address = Column('prov_ip_address', String(255))
+    ipmi_interface = Column('ipmi_interface', String(255))
+    ipmitool_extra_option = Column('ipmitool_extra_option', String(255))
+    kernel_append_params = Column('kernel_append_params', String(255))
     resource_pool = Column('resource_pool', Boolean)
-    for c in [host_name, instance_type_id, prov_ip_address, resource_pool]:
+    for c in [host_name, instance_type_id, prov_ip_address, ipmi_interface,
+              ipmitool_extra_option, kernel_append_params, resource_pool]:
         t.create_column(c)
 
 
@@ -37,5 +41,6 @@ def downgrade(migrate_engine):
     t = Table('bm_nodes', meta, autoload=True)
     t.drop_column('instance_name')
     for c in ['host_name', 'instance_type_id', 'prov_ip_address',
-              'resource_pool']:
+              'ipmi_interface', 'ipmitool_extra_option',
+              'kernel_append_params', 'resource_pool']:
         t.drop_column(c)

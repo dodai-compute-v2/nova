@@ -3,6 +3,7 @@
 
 # Copyright 2012 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 NTT DOCOMO, INC.
+# Copyright 2013 National Institute of Informatics.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -48,6 +49,9 @@ opts = [
     cfg.IntOpt('ipmi_power_retry',
                default=5,
                help='maximal number of retries for IPMI operations'),
+    cfg.IntOpt('ipmi_power_interval',
+               default=5,
+               help='Interval to wait for the next IPMI operations'),
     ]
 
 baremetal_group = cfg.OptGroup(name='baremetal',
@@ -260,3 +264,84 @@ class IPMI(base.PowerManager):
                           run_as_root=True,
                           check_exit_code=[0, 99])
         bm_utils.unlink_without_raise(_get_console_pid_path(self.node_id))
+
+
+class DodaiIPMI(IPMI):
+    """IPMI Power Driver for dodai-compute-v2"""
+
+    def __init__(self, node, **kwargs):
+        super(DodaiIPMI, self).__init__(node, **kwargs)
+        self.ipmi_interface = node.get('ipmi_interface')
+        self.ipmitool_extra_option = node.get('ipmitool_extra_option')
+
+    def _exec_ipmitool(self, command):
+        args = ['ipmitool',
+                '-I',
+                self.ipmi_interface if self.ipmi_interface else 'lanplus',
+                '-H',
+                self.address,
+                '-U',
+                self.user,
+                '-f']
+        pwfile = _make_password_file(self.password)
+        try:
+            args.append(pwfile)
+            if self.ipmitool_extra_option:
+                args.extend(self.ipmitool_extra_option.split(" "))
+            args.extend(command.split(" "))
+            out, err = utils.execute(*args, attempts=3)
+            LOG.debug(_("ipmitool stdout: '%(out)s', stderr: '%(err)s'"),
+                      locals())
+            return out, err
+        finally:
+            bm_utils.unlink_without_raise(pwfile)
+
+    def _power_on(self):
+        """Turn the power to this node ON."""
+
+        def _wait_for_power_on():
+            """Called at an interval until the node's power is on."""
+
+            if self._is_power("on"):
+                LOG.debug("DodaiIPMI power status is on.")
+                self.state = baremetal_states.ACTIVE
+                raise utils.LoopingCallDone()
+            if self.retries > CONF.baremetal.ipmi_power_retry:
+                LOG.debug("DodaiIPMI power on exceeded max count of retry.")
+                self.state = baremetal_states.ERROR
+                raise utils.LoopingCallDone()
+            try:
+                self.retries += 1
+                LOG.debug("DodaiIPMI powering on. retries:%d" % self.retries)
+                self._exec_ipmitool("power on")
+            except Exception:
+                LOG.exception(_("IPMI power on failed"))
+
+        self.retries = 0
+        timer = utils.FixedIntervalLoopingCall(_wait_for_power_on)
+        timer.start(interval=CONF.baremetal.ipmi_power_interval).wait()
+
+    def _power_off(self):
+        """Turn the power to this node OFF."""
+
+        def _wait_for_power_off():
+            """Called at an interval until the node's power is off."""
+
+            if self._is_power("off"):
+                LOG.debug("DodaiIPMI power status is off.")
+                self.state = baremetal_states.DELETED
+                raise utils.LoopingCallDone()
+            if self.retries > CONF.baremetal.ipmi_power_retry:
+                LOG.debug("DodaiIPMI power off exceeded max count of retry.")
+                self.state = baremetal_states.ERROR
+                raise utils.LoopingCallDone()
+            try:
+                self.retries += 1
+                LOG.debug("DodaiIPMI powering off. retries:%d" % self.retries)
+                self._exec_ipmitool("power off")
+            except Exception:
+                LOG.exception(_("IPMI power off failed"))
+
+        self.retries = 0
+        timer = utils.FixedIntervalLoopingCall(_wait_for_power_off)
+        timer.start(interval=CONF.baremetal.ipmi_power_interval).wait()

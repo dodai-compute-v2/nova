@@ -4083,26 +4083,23 @@ class ComputeManager(manager.SchedulerDependentManager):
 
     @manager.periodic_task
     def _recreate_instance_as_resource_pool(self, context):
+        """Detect instances whose nodes are deleted
+        and recreate instances as resource pool based on their information.
+        """
         LOG.debug("#_recreate_instance_as_resource_pool() called.")
         from nova.virt.baremetal import db as bmdb
         from nova.virt.baremetal import baremetal_states
-        context = context.elevated(read_deleted='no')
-        nodes = bmdb.bm_node_get_all(context)
+        nodes = bmdb.bm_node_get_all(context.elevated(read_deleted='no'))
         deleted_nodes = [node for node in nodes
                              if node['task_state'] == baremetal_states.DELETED]
         for node in deleted_nodes:
-            context = context.elevated(read_deleted='yes')
-            filters = {'deleted': True,
-                       'node': node['uuid']}
-            instances = self.conductor_api.instance_get_all_by_filters(
-                        context, filters)
-            if not instances:
+            instance = self.conductor_api.instance_get_by_uuid(
+                                context.elevated(read_deleted='yes'),
+                                node['instance_uuid'])
+            if not instance['deleted']:
                 LOG.debug("Deleted instance %s was not found in the database. "
-                          "skipping..." % node['uuid'])
+                          "skipping..." % node['instance_uuid'])
                 continue
-            # pick up the last deleted one
-            sorted(instances, key=lambda x: x['deleted_at'])
-            instance = instances[0]
             LOG.info(_("Recreating deleted instance %s as resource pool.")
                        % instance['uuid'])
 
@@ -4127,8 +4124,12 @@ class ComputeManager(manager.SchedulerDependentManager):
             if nics is None:
                 LOG.warn("No available network for resource pool found.")
                 return
+            # NOTE(yokose): update compute_nodes before creating instance
+            self.update_available_resource(context)
             bmdb.bm_node_update(context, node['id'],
-                                {'task_state': baremetal_states.INIT})
+                                {'instance_uuid': None,
+                                 'instance_name': None,
+                                 'task_state': baremetal_states.INIT})
             _get_nova_client().servers.create(instance_name,
                      image_id, instance_type['flavorid'],
                      meta=None, files=None,
@@ -4138,9 +4139,30 @@ class ComputeManager(manager.SchedulerDependentManager):
                      block_device_mapping=None, nics=nics,
                      scheduler_hints=None, config_drive=None)
 
+    def _cleanup_instance_unassociated_with_node(self, context, instance_uuid):
+        """Cleanup active instances which are not associated with
+        any baremetal nodes.
+        """
+        LOG.info(_("Cleaning up ex-resource pool instance %s.")
+                   % instance_uuid)
+        try:
+            instance = self.conductor_api.instance_get_by_uuid(context,
+                                                               instance_uuid)
+            self.conductor_api.instance_info_cache_delete(context, instance)
+            # NOTE(yokose): non-admin user can't delete admin user's ports
+            admin_context = nova.context.get_admin_context()
+            self._deallocate_network(admin_context, instance)
+            instance = self._instance_update(context,
+                                             instance_uuid,
+                                             vm_state=vm_states.DELETED,
+                                             task_state=None,
+                                             terminated_at=timeutils.utcnow())
+            self.conductor_api.instance_destroy(context, instance)
+        except Exception as e:
+            LOG.warn(str(e))
+
 
 def _set_admin_data(context):
-    LOG.debug("#_set_admin_data() context=%s" % context)
     username = CONF.keystone.username
     password = CONF.keystone.password
     tenant_name = CONF.keystone.tenant_name

@@ -23,7 +23,6 @@ Class for PXE bare-metal nodes.
 
 import datetime
 import os
-import socket
 import httplib2
 import tempfile
 import shutil
@@ -35,6 +34,8 @@ from nova.compute import instance_types
 from nova import exception
 from nova.openstack.common import fileutils
 from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
+from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import utils
@@ -63,12 +64,8 @@ pxe_opts = [
     cfg.IntOpt('pxe_deploy_check_interval',
                help='Interval for PXE deployments check request.',
                default=5),
-    cfg.StrOpt('injection_scripts_path',
-               default='/var/lib/nova/baremetal/injection-scripts',
-               help='Path of injection scripts to be used when deploying'),
-    cfg.StrOpt('deletion_scripts_path',
-               default='/var/lib/nova/baremetal/deletion-scripts',
-               help='Path of disk deletion scripts to be used when deleting'),
+    cfg.StrOpt('rsync_alt_port',
+               help='alternative rsync port for pxe config'),
     cfg.StrOpt('base_dir_path',
                default='/var/lib/nova/instances/_base/',
                help="Where cached images are stored under $instances_path."
@@ -80,9 +77,6 @@ pxe_opts = [
                help="Call the dodai_os_install_manager.py"),
     cfg.IntOpt('dodai_instance_agent_bind_port',
                default=60601,
-               help='Port number that is used when the deploying'),
-    cfg.IntOpt('dodai_instance_agent_bind_subport',
-               default=60602,
                help='Port number that is used when the deploying'),
     cfg.StrOpt('dodai_instance_agent_config',
                default='/mnt/.dodai/etc',
@@ -113,13 +107,14 @@ def _get_cheetah():
 
 
 def build_pxe_config(deployment_aki_path, deployment_ari_path,
-                     root_size, swap_size, ephemeral_size,
-                     kdump_size, ami_path, prov_ip_address,
+                     kernel_append_params, root_size, swap_size,
+                     ephemeral_size, kdump_size, ami_path, prov_ip_address,
                      prov_mac_address, host_name,
                      root_fs_type, is_delete=False):
     pxe_options = {
         'deployment_aki_path': deployment_aki_path,
         'deployment_ari_path': deployment_ari_path,
+        'kernel_append_params': kernel_append_params,
         'root_size': root_size,
         'swap_size': swap_size,
         'ephemeral_size': ephemeral_size,
@@ -130,21 +125,21 @@ def build_pxe_config(deployment_aki_path, deployment_ari_path,
         'host_name': host_name,
         'root_fs_type': root_fs_type,
         'agent_bind_port': CONF.baremetal.dodai_instance_agent_bind_port,
-        'agent_bind_subport': CONF.baremetal.dodai_instance_agent_bind_subport,
         'agent_config': CONF.baremetal.dodai_instance_agent_config,
         'prov_subnet': CONF.baremetal.dodai_prov_subnet,
+        'injection_scripts_path': 'rsync://%s:%s/scripts/'
+             % (CONF.baremetal.rsync_ip, CONF.baremetal.rsync_alt_port),
         'pxe_append_params': CONF.baremetal.pxe_append_params,
     }
     if is_delete:
         pxe_options.update({
             'action': 'delete',
-            'deletion_scripts_path': CONF.baremetal.deletion_scripts_path,
-            'injection_scripts_path': ''})
+            'deletion_scripts_path': 'rsync://%s:%s/scripts/deletion-script'
+                 % (CONF.baremetal.rsync_ip, CONF.baremetal.rsync_alt_port)})
     else:
         pxe_options.update({
             'action': 'deploy',
-            'deletion_scripts_path': '',
-            'injection_scripts_path': CONF.baremetal.injection_scripts_path})
+            'deletion_scripts_path': ''})
     cheetah = _get_cheetah()
     pxe_config = str(cheetah(
         open(CONF.baremetal.pxe_config_template).read(),
@@ -264,6 +259,7 @@ class PXE(base.NodeDriver):
         self.os_install_manager = importutils.import_object(
             CONF.baremetal.os_install_manager)
 
+    @lockutils.synchronized('cache_tftp_images', 'nova-', external=True)
     def _cache_tftp_images(self, context, instance, image_info):
         """Fetch the necessary kernels and ramdisks for the instance."""
         fileutils.ensure_tree(CONF.baremetal.base_dir_path)
@@ -317,6 +313,17 @@ class PXE(base.NodeDriver):
         self._cache_tftp_images(context, instance, tftp_image_info)
         self._cache_image(context, instance, image_meta)
 
+    def cache_images_for_delete(self, context, instance):
+        """Retrieve images except ami."""
+        instance_type = self.virtapi.instance_type_get(
+            context, instance['instance_type_id'])
+        fileutils.ensure_tree(
+            os.path.join(CONF.baremetal.tftp_root, instance['uuid']))
+        tftp_image_info = get_tftp_image_info(instance, instance_type)
+        # NOTE(yokose): image_ref is not necessary for delete
+        del tftp_image_info['image_ref']
+        self._cache_tftp_images(context, instance, tftp_image_info)
+
     def destroy_images(self, context, node, instance):
         """Delete instance's image file."""
         bm_utils.unlink_without_raise(get_image_file_path(instance))
@@ -346,6 +353,7 @@ class PXE(base.NodeDriver):
                          instance['uuid'], "deploy_kernel"),
             os.path.join(CONF.baremetal.tftp_root,
                          instance['uuid'], "deploy_ramdisk"),
+            node['kernel_append_params'],
             root_mb,
             swap_mb,
             ephemeral_mb,
@@ -365,11 +373,7 @@ class PXE(base.NodeDriver):
     def activate_bootloader_for_delete(self, context, node, instance):
         instance_type = self.virtapi.instance_type_get(
             context, instance['instance_type_id'])
-        (root_mb, swap_mb, ephemeral_mb, kdump_mb) = \
-            get_partition_sizes(instance, instance_type)
         pxe_config_file_path = get_pxe_config_file_path(instance)
-        os_install_url = self.os_install_manager.prep_os_install_manager(
-            instance['image_ref'], node['prov_ip_address'])
         image_info = get_tftp_image_info(instance, instance_type)
         root_fs_type = \
             get_root_fs_type(instance, image_info['image_ref'][1])
@@ -378,11 +382,12 @@ class PXE(base.NodeDriver):
                          instance['uuid'], "deploy_kernel"),
             os.path.join(CONF.baremetal.tftp_root,
                          instance['uuid'], "deploy_ramdisk"),
-            root_mb,
-            swap_mb,
-            ephemeral_mb,
-            kdump_mb,
-            os_install_url,
+            '',
+            '',
+            '',
+            '',
+            '',
+            '',
             node['prov_ip_address'],
             node['prov_mac_address'],
             node['host_name'],
@@ -428,8 +433,6 @@ class PXE(base.NodeDriver):
 
         bm_utils.rmtree_without_raise(
             os.path.join(CONF.baremetal.tftp_root, instance['uuid']))
-        self.os_install_manager.post_os_install_manager(
-            instance['image_ref'], node['prov_ip_address'])
 
     def activate_node(self, context, node, instance):
         """Wait for PXE deployment to complete."""
@@ -443,9 +446,10 @@ class PXE(base.NodeDriver):
         def _get_for_deploy_rest():
             target_ip = node['prov_ip_address']
             target_port = CONF.baremetal.dodai_instance_agent_bind_port
-            path = "http://%s:%d/services/dodai-instance/state.json" %\
+            path = "http://%s:%d/services/dodai-instance/state" %\
                    (target_ip, target_port)
             http = httplib2.Http()
+            result = None
             try:
                 resp, body = http.request(path, 'GET')
                 if resp.status >= 400:
@@ -453,10 +457,15 @@ class PXE(base.NodeDriver):
                                         "from the physical machine")
                     raise exception.InstanceDeployFailure(
                         locals['error'] % instance['uuid'])
-                return body
+                try:
+                    result = jsonutils.loads(body)['result']
+                except Exception:
+                    pass
+                return result
             except Exception as e:
-                LOG.debug(_("state.json error: %s") % str(e))
-                return None
+                LOG.debug(_("Exception occurred during accessing to %s: %s")
+                            % (path, str(e)))
+                return result
 
         def _replace_boot_config():
             """Replace boot config"""
@@ -481,26 +490,22 @@ class PXE(base.NodeDriver):
         def _wait_for_deploy():
             """Called at an interval until the deployment completes."""
             state = _get_for_deploy_rest()
-            LOG.debug(_("state: %s") % state)
-            try:
+            LOG.debug(_("_wait_for_deploy() state: %s") % state)
                 if state is None:
                     LOG.info(_("wait until the PC to start for instance %s") %
                              instance['uuid'])
-                elif state.find(baremetal_states.DEPLOYING) != -1:
+            elif state == baremetal_states.DEPLOYING:
                     LOG.info(_("wait to state json file for instance %s") %
                              instance['uuid'])
                     locals['started'] = True
-                elif state.find(baremetal_states.DEPLOYDONE) != -1 or \
-                        state.find(baremetal_states.ACTIVE) != -1:
+            elif state == baremetal_states.DEPLOYDONE or\
+                    state == baremetal_states.ACTIVE:
                     LOG.info(_("PXE deploy completed for instance %s") %
                              instance['uuid'])
                     _replace_boot_config()
                     raise utils.LoopingCallDone()
-                elif state.find(baremetal_states.DEPLOYFAIL) != -1:
+            elif state == baremetal_states.DEPLOYFAIL:
                     locals['error'] = _("PXE deploy failed for instance %s")
-            except exception.NodeNotFound:
-                locals['error'] = _("Baremetal node deleted while waiting "
-                                    "for deployment of instance %s")
 
             if (CONF.baremetal.pxe_deploy_timeout and
                     timeutils.utcnow() > expiration):
@@ -517,6 +522,9 @@ class PXE(base.NodeDriver):
         if locals['error']:
             raise exception.InstanceDeployFailure(
                 locals['error'] % instance['uuid'])
+        else:
+            self.os_install_manager.post_os_install_manager(
+                instance['image_ref'], node['prov_ip_address'])
 
     def deactivate_node(self, context, node, instance):
         pass
@@ -533,9 +541,10 @@ class PXE(base.NodeDriver):
         def _get_for_delete_rest():
             target_ip = node['prov_ip_address']
             target_port = CONF.baremetal.dodai_instance_agent_bind_port
-            path = "http://%s:%d/services/dodai-instance/state.json" %\
+            path = "http://%s:%d/services/dodai-instance/state" %\
                    (target_ip, target_port)
             http = httplib2.Http()
+            result = None
             try:
                 resp, body = http.request(path, 'GET')
                 if resp.status >= 400:
@@ -543,33 +552,34 @@ class PXE(base.NodeDriver):
                                         "from the physical machine")
                     raise exception.InstanceDeployFailure(
                         locals['error'] % instance['uuid'])
-                return body
+                try:
+                    result = jsonutils.loads(body)['result']
+                except Exception:
+                    pass
+                return result
             except Exception as e:
-                LOG.debug(_("state.json error: %s") % str(e))
-                return None
+                LOG.debug(_("Error occurred during accessing to %s: %s")
+                            % (path, str(e)))
+                return result
 
         def _wait_for_delete():
             """Called at an interval until the delete completes."""
             state = _get_for_delete_rest()
-            LOG.debug(_("state: %s") % state)
-            try:
+            LOG.debug(_("_wait_for_delete() state: %s") % state)
                 if state is None:
                     LOG.info(_("wait until the PC to start for instance %s") %
                              instance['uuid'])
-                elif state.find(baremetal_states.DELETING) != -1:
+            elif state == baremetal_states.DELETING:
                     LOG.info(_("wait to state json file for instance %s") %
                              instance['uuid'])
                     locals['started'] = True
-                elif state.find(baremetal_states.DELETEDONE) != -1 or \
-                        state.find(baremetal_states.DELETED) != -1:
+            elif state == baremetal_states.DELETEDONE or \
+                    state == baremetal_states.DELETED:
                     LOG.info(_("PXE delete completed for instance %s") %
                              instance['uuid'])
                     raise utils.LoopingCallDone()
-                elif state.find(baremetal_states.DELETEFAIL) != -1:
+            elif state == baremetal_states.DELETEFAIL:
                     locals['error'] = _("PXE delete failed for instance %s")
-            except exception.NodeNotFound:
-                locals['error'] = _("Baremetal node deleted while waiting "
-                                    "for delete	 of instance %s")
 
             if (CONF.baremetal.pxe_deploy_timeout and
                     timeutils.utcnow() > expiration):

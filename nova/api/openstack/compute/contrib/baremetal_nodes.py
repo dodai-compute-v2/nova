@@ -32,7 +32,8 @@ node_fields = ['id', 'uuid', 'cpus', 'local_gb', 'memory_mb', 'pm_address',
                'pm_user', 'prov_mac_address', 'prov_vlan_id',
                'service_host', 'terminal_port', 'instance_uuid',
                'terminal_port', 'host_name', 'instance_type_id',
-               'prov_ip_address'
+               'prov_ip_address', 'ipmi_interface', 'ipmitool_extra_option',
+               'kernel_append_params'
                ]
 
 interface_fields = ['id', 'address', 'datapath_id', 'port_no']

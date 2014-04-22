@@ -22,9 +22,7 @@
 A driver for Bare-metal platform.
 """
 import httplib2
-import httplib
 import re
-import urllib
 
 from oslo.config import cfg
 
@@ -105,6 +103,7 @@ CONF.import_opt('host', 'nova.netconf')
 DEFAULT_FIREWALL_DRIVER = "%s.%s" % (
     firewall.__name__,
     firewall.NoopFirewallDriver.__name__)
+METAKEY_FIXED_IP_PREFIX = 'fixed_ip_'
 METAKEY_FLOATING_IP_PREFIX = 'floating_ip_'
 
 
@@ -118,13 +117,16 @@ def _get_baremetal_node_by_instance_uuid(instance_uuid):
     return node
 
 
-def _update_state(context, node, instance, state):
+def _update_state(context, node, instance, state, resource_pool=False):
     """Update the node state in baremetal DB
 
     If instance is not supplied, reset the instance_uuid field for this node.
 
     """
-    values = {'task_state': state}
+    # NOTE(yokose): only if instance is active in resource pool,
+    #               resource_pool is allowed to be true
+    values = {'task_state': state,
+              'resource_pool': resource_pool}
     if not instance:
         values['instance_uuid'] = None
         values['instance_name'] = None
@@ -140,29 +142,6 @@ def _get_image_meta(context, image_ref):
     image_service, image_id = glance.get_remote_image_service(context,
                                                               image_ref)
     return image_service.show(context, image_id)
-
-
-def _get_nova_endpoint_url(instance):
-    project_id = instance.get('project_id')
-    try:
-        kc = keystone_client.Client(
-                 username=CONF.keystone.username,
-                 password=CONF.keystone.password,
-                 tenant_name=CONF.keystone.tenant_name,
-                 auth_url=CONF.keystone.auth_url)
-        token = kc.service_catalog.get_token()['id']
-        kc = keystone_client.Client(
-                 token=token,
-                 tenant_id=project_id,
-                 auth_url=CONF.keystone.auth_url)
-        for service in kc.service_catalog.catalog['serviceCatalog']:
-            if service['name'] == 'nova':
-                endpoint_url = service['endpoints'][0]['publicURL']
-                return endpoint_url
-        else:
-            raise Exception("Endpoint of nova not found.")
-    except Exception as e:
-        raise e
 
 
 def _instance_spawned_by_resource_pool_user(instance):
@@ -295,8 +274,7 @@ class BareMetalDriver(driver.ComputeDriver):
         node_uuid = self._require_node(instance)
         node = db.bm_node_get_by_node_uuid(context, node_uuid)
         ifaces = db.bm_interface_get_all_by_bm_node_id(context, node['id'])
-        return [iface['address'] for iface
-                in sorted(ifaces, key=lambda x: x['id'])]
+        return set(iface['address'] for iface in ifaces)
 
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
@@ -573,76 +551,71 @@ class DodaiBareMetalDriver(BareMetalDriver):
     def __init__(self, virtapi, read_only=False):
         super(DodaiBareMetalDriver, self).__init__(virtapi)
 
-    def destroy(self, instance, network_info, block_device_info=None):
+    def macs_for_instance(self, instance):
         context = nova_context.get_admin_context()
-
-        try:
-            node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
-        except exception.InstanceNotFound:
-            LOG.warning(_("Destroy called on non-existing instance %s")
-                    % instance['uuid'])
-            return
-
-        try:
-            # pxe boot for delete
-            self.driver.activate_bootloader_for_delete(context, node, instance)
-            pm = get_power_manager(node=node, instance=instance)
-            pm.reboot_node()
-            # wait for delete to complete
-            self.driver.deactivate_node_for_delete(context, node, instance)
-
-            self.driver.deactivate_bootloader(context, node, instance)
-            self.driver.destroy_images(context, node, instance)
-            self._stop_firewall(instance, network_info)
-            self._unplug_vifs(instance, network_info)
-            _update_state(context, node, None, baremetal_states.DELETED)
-        except Exception, e:
-            with excutils.save_and_reraise_exception():
-                try:
-                    LOG.error(_("Error from baremetal driver "
-                                "during destroy: %s") % e)
-                    _update_state(context, node, instance,
-                                  baremetal_states.ERROR)
-                except Exception:
-                    LOG.error(_("Error while recording destroy failure in "
-                                "baremetal database: %s") % e)
+        node_uuid = self._require_node(instance)
+        node = db.bm_node_get_by_node_uuid(context, node_uuid)
+        ifaces = db.bm_interface_get_all_by_bm_node_id(context, node['id'])
+        # NOTE(yokose): sort by bm_interfaces.id
+        return [iface['address'] for iface
+                in sorted(ifaces, key=lambda x: x['id'])]
 
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
         node_uuid = self._require_node(instance)
         node = db.bm_node_get_by_node_uuid(context, node_uuid)
+        old_instance_uuid = node['instance_uuid']
         resource_pool = node['resource_pool']
+
         instance_type = self.driver.virtapi.instance_type_get(
                                 context, instance['instance_type_id'])
         default_image_id = instance_type['extra_specs'].get(
             'baremetal:default_image')
         is_resource_pool_user = _instance_spawned_by_resource_pool_user(
                                         instance)
-        if resource_pool and default_image_id == image_meta['id']:
-            # recycle resource pool's machine
-            self._put_keypair(node, instance)
-            values = {'instance_uuid': instance['uuid'],
+        is_recycle = resource_pool and default_image_id == image_meta['id']
+        if is_recycle:
+            # recycle resource pool's instance
+            LOG.info(_("Recycling resource pool's instance. "
+                       "old_instance: %s, new_instance: %s") %
+                       (old_instance_uuid, instance['uuid']))
+            db.bm_node_update(context, node['id'],
+                              {'instance_uuid': instance['uuid'],
                       'instance_name': instance['hostname'],
                       'task_state': baremetal_states.ACTIVE,
-                      'resource_pool': is_resource_pool_user}
-            db.bm_node_update(context, node['id'], values)
-        else:
-            # NOTE(deva): this db method will raise an exception if the node is
-            #             already in use. We call it here to ensure no one else
-            #             allocates this node before we begin provisioning it.
-            node = db.bm_node_associate_and_update(context, node_uuid,
-                        {'instance_uuid': instance['uuid'],
-                         'instance_name': instance['hostname'],
-                         'task_state': baremetal_states.BUILDING,
-                         'resource_pool':
-                              default_image_id == image_meta['id']\
-                                  and is_resource_pool_user})
+                               'resource_pool': is_resource_pool_user})
+            # cleanup old instance
+            if old_instance_uuid is not None:
+                self._cleanup_old_instance(context, old_instance_uuid)
 
             try:
                 self._plug_vifs(instance, network_info, context=context)
-                self._attach_block_devices(instance, block_device_info)
-                self._start_firewall(instance, network_info)
+                self._put_keypair(node, instance)
+                self._set_fixed_ip(node, network_info)
+            except Exception:
+                with excutils.save_and_reraise_exception():
+                    LOG.error(_("Error recycling instance %(instance)s "
+                                "on baremetal node %(node)s.") %
+                                {'instance': instance['uuid'],
+                                 'node': node['uuid']})
+                    _update_state(context, node, instance,
+                                  baremetal_states.ERROR)
+                    self._unplug_vifs(instance, network_info)
+        else:
+            LOG.info(_("Spawning brand-new instance. "
+                       "old_instance: %s, new_instance: %s") %
+                       (old_instance_uuid, instance['uuid']))
+            db.bm_node_update(context, node['id'],
+                        {'instance_uuid': instance['uuid'],
+                         'instance_name': instance['hostname'],
+                               'task_state': baremetal_states.BUILDING})
+            # NOTE(yokose): cleanup old instance in the case
+            #               where resource_pool but not the same images
+            if old_instance_uuid is not None:
+                self._cleanup_old_instance(context, old_instance_uuid)
 
+            try:
+                self._plug_vifs(instance, network_info, context=context)
                 self.driver.cache_images(
                                 context, node, instance,
                                 admin_password=admin_password,
@@ -651,13 +624,17 @@ class DodaiBareMetalDriver(BareMetalDriver):
                                 network_info=network_info,
                             )
                 self.driver.activate_bootloader(context, node, instance)
-                self.power_on(instance, node)
-                self.driver.activate_node(context, node, instance)
-                self._put_keypair(node, instance)
-                _update_state(context, node, instance, baremetal_states.ACTIVE)
                 # reboot node
                 pm = get_power_manager(node=node, instance=instance)
                 pm.reboot_node()
+                self.driver.activate_node(context, node, instance)
+                self.driver.deactivate_node(context, node, instance)
+                self._put_keypair(node, instance)
+                self._set_fixed_ip(node, network_info)
+                # reboot node
+                pm.reboot_node()
+                _update_state(context, node, instance, baremetal_states.ACTIVE,
+                              is_resource_pool_user)
 
             except Exception:
                 with excutils.save_and_reraise_exception():
@@ -676,50 +653,141 @@ class DodaiBareMetalDriver(BareMetalDriver):
                     self.driver.deactivate_bootloader(context, node, instance)
                     self.driver.destroy_images(context, node, instance)
 
-                    self._detach_block_devices(instance, block_device_info)
-                    self._stop_firewall(instance, network_info)
                     self._unplug_vifs(instance, network_info)
 
-                    _update_state(context, node, None,
+                    # NOTE(yokose): set instance_uuid to identify the deleted
+                    #           instance in recreate_instance_as_resource_pool
+                    _update_state(context, node, instance,
                                   baremetal_states.DELETED)
 
+    def destroy(self, instance, network_info, block_device_info=None):
+        context = nova_context.get_admin_context()
+
+        try:
+            node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
+        except exception.InstanceNotFound:
+            LOG.warning(_("Destroy called on non-existing instance %s")
+                    % instance['uuid'])
+            return
+
+        try:
+            # pxe boot for delete
+            self.driver.cache_images_for_delete(context, instance)
+            self.driver.activate_bootloader_for_delete(context, node, instance)
+            pm = get_power_manager(node=node, instance=instance)
+            pm.reboot_node()
+            # wait for delete to complete
+            self.driver.deactivate_node_for_delete(context, node, instance)
+            # reboot node
+            pm.reboot_node()
+
+            self.driver.deactivate_bootloader(context, node, instance)
+            self.driver.destroy_images(context, node, instance)
+            self._unplug_vifs(instance, network_info)
+            # NOTE(yokose): set instance_uuid to identify the deleted instance
+            #               in recreate_instance_as_resource_pool
+            _update_state(context, node, instance, baremetal_states.DELETED)
+        except Exception, e:
+            with excutils.save_and_reraise_exception():
+                try:
+                    LOG.error(_("Error from baremetal driver "
+                                "during destroy: %s") % e)
+                    _update_state(context, node, instance,
+                                  baremetal_states.ERROR)
+                except Exception:
+                    LOG.error(_("Error while recording destroy failure in "
+                                "baremetal database: %s") % e)
+
+    def _cleanup_old_instance(self, context, instance_uuid):
+        CONF.import_opt('compute_manager', 'nova.service')
+        compute = importutils.import_object(CONF.compute_manager)
+        compute._cleanup_instance_unassociated_with_node(
+                context, instance_uuid)
+
     def _put_keypair(self, node, instance):
+        headers = {'Content-type': 'application/json', 'Accept': '*/*'}
         target_ip = node['prov_ip_address']
         target_port = CONF.baremetal.dodai_instance_agent_bind_port
-        path = "/services/dodai-instance/key.json"
-        connection = httplib.HTTPConnection(target_ip, target_port)
-        params = urllib.urlencode({'public_key': instance['key_data']})
-        headers = {'Content-type': 'application/x-www-form-urlencoded',
-                   'Accept': '*/*'}
-        connection.request('PUT', path, params, headers)
-        response = connection.getresponse()
-        result = response.read()
-        LOG.debug(_("Put keypair result:%s") % result)
+        path = "http://%s:%s/services/dodai-instance/key"\
+               % (target_ip, target_port)
+        body = jsonutils.dumps({'public_key': instance['key_data']})
+        LOG.debug("Put keypair path:%s" % path)
+        LOG.debug("Put keypair body:%s" % body)
+        http = httplib2.Http()
+        response, content = http.request(path, 'PUT',
+                                         body=body, headers=headers)
+        LOG.debug("Put keypair status:%d" % response.status)
+        LOG.debug("Put keypair content:%s" % content)
         if response.status >= 400:
             msg = _("Failed to put keypair. path=%s, status=%d")\
                       % (path, response.status)
             LOG.error(msg)
             raise Exception(msg)
 
+    def _set_fixed_ip(self, node, network_info):
+        LOG.debug("#network_info=%s" % network_info)
+        if not network_info:
+            LOG.debug("network_info is not set. _set_fixed_ip is skipped.")
+            return
+        headers = {'Content-type': 'application/json', 'Accept': '*/*'}
+        target_ip = node['prov_ip_address']
+        target_port = CONF.baremetal.dodai_instance_agent_bind_port
+        path = "http://%s:%d/services/dodai-instance/networks"\
+               % (target_ip, target_port)
+        ip_objs = {}
+        for i, (_, fixed_ip) in enumerate(network_info):
+            ip_obj = {'ip_address': fixed_ip['ips'][0]['ip'],
+                      'mac_address': fixed_ip['mac'],
+                      'netmask': fixed_ip['ips'][0]['netmask'],
+                      'gateway_ip': fixed_ip['ips'][0]['gateway'],
+                      'dnsnameservers': [{'address': dns} for dns
+                                         in fixed_ip['dns']]}
+            ip_objs[METAKEY_FIXED_IP_PREFIX + str(i + 1)] = ip_obj
+        body = jsonutils.dumps(ip_objs)
+        LOG.debug("Set FixedIp path:%s" % path)
+        LOG.debug("Set FixedIp body:%s" % body)
+        http = httplib2.Http()
+        response, content = http.request(path, 'PUT',
+                                         body=body, headers=headers)
+        LOG.debug("Set FixedIP status:%d" % response.status)
+        LOG.debug("Set FixedIP content:%s" % content)
+        if response.status >= 400:
+            msg = _("Failed to set FixedIP. path=%s, status=%d")\
+                      % (path, response.status)
+            LOG.error(msg)
+            raise Exception(msg)
+
     def change_instance_metadata(self, context, instance, diff):
+        LOG.debug("#DodaiBareMetalDriver.change_instance_metadata() called.")
+        LOG.debug("#instance=%s" % instance)
+        LOG.debug("#diff=%s" % diff)
         node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
         # NOTE(yokose): Only 'floating_ip_x' key is accepted.
         for key in diff.keys():
             match = re.match('^' + METAKEY_FLOATING_IP_PREFIX + '(\d+)$', key)
             if match is not None:
+                headers = {'Content-type': 'application/json', 'Accept': '*/*'}
                 target_ip = node['prov_ip_address']
                 target_port = CONF.baremetal.dodai_instance_agent_bind_port
-                path = "http://%s:%d/services/dodai-instance/networks.json"\
+                if diff[key][0] == '+':
+                    path = "http://%s:%d/services/dodai-instance/networks"\
                            % (target_ip, target_port)
-                body = {'auth_token': context.auth_token,
-                        'instance_id': instance['uuid'],
-                        'metadata_server': "%s/servers/%s/metadata"\
-                                           % (_get_nova_endpoint_url(instance),
-                                              instance['uuid']),
-                        'tenant_id': context.project_id}
+                    method = 'PUT'
+                    body = jsonutils.dumps(
+                        {key: jsonutils.loads(diff[key][1])})
+                elif diff[key][0] == '-':
+                    path = "http://%s:%d/services/dodai-instance/networks/%s"\
+                           % (target_ip, target_port, key)
+                    method = 'DELETE'
+                    body = None
+                else:
+                    continue
+                LOG.debug("#path=%s" % path)
+                LOG.debug("#method=%s" % method)
+                LOG.debug("#body=%s" % body)
                 http = httplib2.Http()
-                response, content = http.request(path, 'PUT',
-                                                 body=jsonutils.dumps(body))
+                response, content = http.request(path, method,
+                                                 body=body, headers=headers)
                 if response.status >= 400:
                     msg = _("Failed to change metadata. path=%s, status=%d")\
                               % (path, response.status)
@@ -727,7 +795,19 @@ class DodaiBareMetalDriver(BareMetalDriver):
                     raise Exception(msg)
                 else:
                     LOG.info(_("Change metadata completed successfully"))
-                    return
         else:
             LOG.warn(_("Metadata doesn't include floating_ip_x key. keys=%s")\
                          % diff.keys())
+
+    def get_available_nodes(self):
+        context = nova_context.get_admin_context()
+        unassociated_nodes = [str(n['uuid']) for n in
+                db.bm_node_get_unassociated(context, service_host=CONF.host)]
+        # NOTE(yokose): add nodes in resource pool and
+        #               deleted node(candidate for resource pool)
+        resource_pool_nodes = [str(n['uuid']) for n in
+                db.bm_node_get_associated(context, service_host=CONF.host)
+                if ((n['resource_pool']
+                        and n['task_state'] == baremetal_states.ACTIVE)
+                    or n['task_state'] == baremetal_states.DELETED)]
+        return unassociated_nodes + resource_pool_nodes

@@ -59,6 +59,9 @@ class BareMetalNode(BASE, models.NovaBase):
     host_name = Column(String(255))
     instance_type_id = Column(Integer)
     prov_ip_address = Column(String(255))
+    ipmi_interface = Column(String(255))
+    ipmitool_extra_option = Column(String(255))
+    kernel_append_params = Column(String(255))
     resource_pool = Column(Boolean, default=False)
 
 
