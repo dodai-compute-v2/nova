@@ -83,7 +83,7 @@ keystone_opts = [
                secret=True),
     cfg.StrOpt('tenant_name', help=_("Admin tenant name")),
     cfg.StrOpt('auth_url', help=_("Authentication URL")),
-    ]
+]
 
 
 LOG = logging.getLogger(__name__)
@@ -581,8 +581,8 @@ class DodaiBareMetalDriver(BareMetalDriver):
                        (old_instance_uuid, instance['uuid']))
             db.bm_node_update(context, node['id'],
                               {'instance_uuid': instance['uuid'],
-                      'instance_name': instance['hostname'],
-                      'task_state': baremetal_states.ACTIVE,
+                               'instance_name': instance['hostname'],
+                               'task_state': baremetal_states.ACTIVE,
                                'resource_pool': is_resource_pool_user})
             # cleanup old instance
             if old_instance_uuid is not None:
@@ -606,8 +606,8 @@ class DodaiBareMetalDriver(BareMetalDriver):
                        "old_instance: %s, new_instance: %s") %
                        (old_instance_uuid, instance['uuid']))
             db.bm_node_update(context, node['id'],
-                        {'instance_uuid': instance['uuid'],
-                         'instance_name': instance['hostname'],
+                              {'instance_uuid': instance['uuid'],
+                               'instance_name': instance['hostname'],
                                'task_state': baremetal_states.BUILDING})
             # NOTE(yokose): cleanup old instance in the case
             #               where resource_pool but not the same images

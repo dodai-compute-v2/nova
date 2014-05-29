@@ -491,21 +491,21 @@ class PXE(base.NodeDriver):
             """Called at an interval until the deployment completes."""
             state = _get_for_deploy_rest()
             LOG.debug(_("_wait_for_deploy() state: %s") % state)
-                if state is None:
-                    LOG.info(_("wait until the PC to start for instance %s") %
-                             instance['uuid'])
+            if state is None:
+                LOG.info(_("wait until the PC to start for instance %s") %
+                         instance['uuid'])
             elif state == baremetal_states.DEPLOYING:
-                    LOG.info(_("wait to state json file for instance %s") %
-                             instance['uuid'])
-                    locals['started'] = True
+                LOG.info(_("wait to state json file for instance %s") %
+                         instance['uuid'])
+                locals['started'] = True
             elif state == baremetal_states.DEPLOYDONE or\
                     state == baremetal_states.ACTIVE:
-                    LOG.info(_("PXE deploy completed for instance %s") %
-                             instance['uuid'])
-                    _replace_boot_config()
-                    raise utils.LoopingCallDone()
+                LOG.info(_("PXE deploy completed for instance %s") %
+                         instance['uuid'])
+                _replace_boot_config()
+                raise utils.LoopingCallDone()
             elif state == baremetal_states.DEPLOYFAIL:
-                    locals['error'] = _("PXE deploy failed for instance %s")
+                locals['error'] = _("PXE deploy failed for instance %s")
 
             if (CONF.baremetal.pxe_deploy_timeout and
                     timeutils.utcnow() > expiration):
@@ -566,20 +566,20 @@ class PXE(base.NodeDriver):
             """Called at an interval until the delete completes."""
             state = _get_for_delete_rest()
             LOG.debug(_("_wait_for_delete() state: %s") % state)
-                if state is None:
-                    LOG.info(_("wait until the PC to start for instance %s") %
-                             instance['uuid'])
+            if state is None:
+                LOG.info(_("wait until the PC to start for instance %s") %
+                         instance['uuid'])
             elif state == baremetal_states.DELETING:
-                    LOG.info(_("wait to state json file for instance %s") %
-                             instance['uuid'])
-                    locals['started'] = True
+                LOG.info(_("wait to state json file for instance %s") %
+                         instance['uuid'])
+                locals['started'] = True
             elif state == baremetal_states.DELETEDONE or \
                     state == baremetal_states.DELETED:
-                    LOG.info(_("PXE delete completed for instance %s") %
-                             instance['uuid'])
-                    raise utils.LoopingCallDone()
+                LOG.info(_("PXE delete completed for instance %s") %
+                         instance['uuid'])
+                raise utils.LoopingCallDone()
             elif state == baremetal_states.DELETEFAIL:
-                    locals['error'] = _("PXE delete failed for instance %s")
+                locals['error'] = _("PXE delete failed for instance %s")
 
             if (CONF.baremetal.pxe_deploy_timeout and
                     timeutils.utcnow() > expiration):
