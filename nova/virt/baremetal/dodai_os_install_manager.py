@@ -204,13 +204,13 @@ class DodaiOSInstallManager(object):
             return
 
         if allow_host in self._list_allow_host(image_id):
-                self._remove_allow_host(image_id, allow_host)
+            self._remove_allow_host(image_id, allow_host)
         LOG.debug("_kill_rsyncd: allow_host: %s" % allow_host)
         LOG.debug("_kill_rsyncd: _list_allow_host: %s"
                   % self._list_allow_host(image_id))
         if 0 < len(self._list_allow_host(image_id)):
             LOG.debug(_("_kill_rsyncd abort"))
-                return
+            return
         rsync_pid_file_path = get_rsync_pid_file_path(image_id)
         with open(rsync_pid_file_path) as rsync_pid:
             pid = rsync_pid.read().strip()
@@ -244,7 +244,7 @@ class DodaiOSInstallManager(object):
                         LOG.debug("_add_allow_host: skip adding %s to %s"
                                   % (allow_host, ','.join(value)))
                         new_config += line
-                        allow_host = None
+                    allow_host = None
                 else:
                     new_config += line
         with open(rsync_config_file_path, 'w') as rsync_conf:
@@ -283,14 +283,14 @@ class DodaiOSInstallManager(object):
                     LOG.debug("_remove_allow_host: remove %s from %s"
                               % (allow_host, ','.join(value)))
                     if 0 < len(value):
-        try:
+                        try:
                             value.remove(allow_host)
                         except Exception as e:
                             LOG.debug(_("#DodaiOSInstallManager.\
                                 _remove_allow_host(): %s" % e))
                         if 0 == len(value):
                             new_config += "hosts allow = \n"
-                    else:
+                        else:
                             new_config += "hosts allow = " + \
                                           ','.join(value) + "\n"
                     else:

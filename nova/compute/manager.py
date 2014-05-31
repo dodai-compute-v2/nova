@@ -4107,15 +4107,15 @@ class ComputeManager(manager.SchedulerDependentManager):
             _set_admin_data(context)
             instance_name = CONF.baremetal.resource_pool_instance_name
             instance_type = self.virtapi.instance_type_get(context,
-                    instance['instance_type_id'])
+                                instance['instance_type_id'])
             # use a default image
             image_id = instance_type['extra_specs'].get(
-                'baremetal:default_image')
+                                'baremetal:default_image')
             # nics should be specified as a sigle dummy network
             nics = None
             if hasattr(self.network_api, '_get_available_networks'):
                 nets = self.network_api._get_available_networks(context,
-                            context.project_id)
+                                context.project_id)
                 resource_pool_nets = [net for net in nets
                             if net['name'] == \
                                 CONF.baremetal.resource_pool_network_name]
