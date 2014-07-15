@@ -128,14 +128,16 @@ def build_pxe_config(deployment_aki_path, deployment_ari_path,
         'agent_config': CONF.baremetal.dodai_instance_agent_config,
         'prov_subnet': CONF.baremetal.dodai_prov_subnet,
         'injection_scripts_path': 'rsync://%s:%s/scripts/'
-             % (CONF.baremetal.rsync_ip, CONF.baremetal.rsync_alt_port),
+                                  % (CONF.baremetal.rsync_ip,
+                                  CONF.baremetal.rsync_alt_port),
         'pxe_append_params': CONF.baremetal.pxe_append_params,
     }
     if is_delete:
         pxe_options.update({
             'action': 'delete',
             'deletion_scripts_path': 'rsync://%s:%s/scripts/deletion-script'
-                 % (CONF.baremetal.rsync_ip, CONF.baremetal.rsync_alt_port)})
+                                     % (CONF.baremetal.rsync_ip,
+                                     CONF.baremetal.rsync_alt_port)})
     else:
         pxe_options.update({
             'action': 'deploy',
@@ -489,7 +491,7 @@ class PXE(base.NodeDriver):
                 return result
             except Exception as e:
                 LOG.debug(_("Exception occurred during accessing to %s: %s")
-                            % (path, str(e)))
+                          % (path, str(e)))
                 return result
 
         def _replace_boot_config():
@@ -586,7 +588,7 @@ class PXE(base.NodeDriver):
                 return result
             except Exception as e:
                 LOG.debug(_("Error occurred during accessing to %s: %s")
-                            % (path, str(e)))
+                          % (path, str(e)))
                 return result
 
         def _wait_for_delete():
