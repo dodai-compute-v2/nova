@@ -128,14 +128,16 @@ def build_pxe_config(deployment_aki_path, deployment_ari_path,
         'agent_config': CONF.baremetal.dodai_instance_agent_config,
         'prov_subnet': CONF.baremetal.dodai_prov_subnet,
         'injection_scripts_path': 'rsync://%s:%s/scripts/'
-             % (CONF.baremetal.rsync_ip, CONF.baremetal.rsync_alt_port),
+                                  % (CONF.baremetal.rsync_ip,
+                                  CONF.baremetal.rsync_alt_port),
         'pxe_append_params': CONF.baremetal.pxe_append_params,
     }
     if is_delete:
         pxe_options.update({
             'action': 'delete',
             'deletion_scripts_path': 'rsync://%s:%s/scripts/deletion-script'
-                 % (CONF.baremetal.rsync_ip, CONF.baremetal.rsync_alt_port)})
+                                     % (CONF.baremetal.rsync_ip,
+                                     CONF.baremetal.rsync_alt_port)})
     else:
         pxe_options.update({
             'action': 'deploy',
@@ -276,6 +278,9 @@ class PXE(base.NodeDriver):
                     user_id=instance['user_id'],
                     project_id=instance['project_id'],
                 )
+            LOG.debug(_("bm_utils.create_link_without_raise(%s, %s)") %
+                      (path, os.path.join(CONF.baremetal.tftp_root,
+                                          instance['uuid'], label)))
             bm_utils.create_link_without_raise(
                 path,
                 os.path.join(CONF.baremetal.tftp_root,
@@ -321,11 +326,16 @@ class PXE(base.NodeDriver):
             os.path.join(CONF.baremetal.tftp_root, instance['uuid']))
         tftp_image_info = get_tftp_image_info(instance, instance_type)
         # NOTE(yokose): image_ref is not necessary for delete
+        LOG.debug(_("del %s") % tftp_image_info['image_ref'])
         del tftp_image_info['image_ref']
         self._cache_tftp_images(context, instance, tftp_image_info)
 
     def destroy_images(self, context, node, instance):
         """Delete instance's image file."""
+        LOG.debug(_("bm_utils.unlink_without_raise(%s)") %
+                  get_image_file_path(instance))
+        LOG.debug(_("bm_utils.rmtree_without_raise(%s)") %
+                  get_image_dir_path(instance))
         bm_utils.unlink_without_raise(get_image_file_path(instance))
         bm_utils.rmtree_without_raise(get_image_dir_path(instance))
 
@@ -364,9 +374,14 @@ class PXE(base.NodeDriver):
             node['host_name'],
             root_fs_type,
         )
+        LOG.debug(_("bm_utils.write_to_file(%s, %s)") %
+                  (pxe_config_file_path, pxe_config))
         bm_utils.write_to_file(pxe_config_file_path, pxe_config)
 
         mac_path = get_pxe_mac_path(node['prov_mac_address'])
+        LOG.debug(_("bm_utils.unlink_without_raise(%s)") % mac_path)
+        LOG.debug(_("bm_utils.create_link_without_raise(%s, %s)") %
+                  (pxe_config_file_path, mac_path))
         bm_utils.unlink_without_raise(mac_path)
         bm_utils.create_link_without_raise(pxe_config_file_path, mac_path)
 
@@ -394,9 +409,14 @@ class PXE(base.NodeDriver):
             root_fs_type,
             is_delete=True
         )
+        LOG.debug(_("bm_utils.write_to_file(%s, %s)") %
+                  (pxe_config_file_path, pxe_config))
         bm_utils.write_to_file(pxe_config_file_path, pxe_config)
 
         mac_path = get_pxe_mac_path(node['prov_mac_address'])
+        LOG.debug(_("bm_utils.unlink_without_raise(%s)") % mac_path)
+        LOG.debug(_("bm_utils.create_link_without_raise(%s, %s)") %
+                  (pxe_config_file_path, mac_path))
         bm_utils.unlink_without_raise(mac_path)
         bm_utils.create_link_without_raise(pxe_config_file_path, mac_path)
 
@@ -425,8 +445,15 @@ class PXE(base.NodeDriver):
         else:
             for label in image_info.keys():
                 (uuid, path) = image_info[label]
+                LOG.debug(_("bm_utils.unlink_without_raise(%s)") % path)
                 bm_utils.unlink_without_raise(path)
 
+        LOG.debug(_("bm_utils.unlink_without_raise(%s)") %
+                  get_pxe_config_file_path(instance))
+        LOG.debug(_("bm_utils.unlink_without_raise(%s)") %
+                  get_pxe_mac_path(node['prov_mac_address']))
+        LOG.debug(_("bm_utils.rmtree_without_raise(%s)") %
+                  os.path.join(CONF.baremetal.tftp_root, instance['uuid']))
         bm_utils.unlink_without_raise(get_pxe_config_file_path(instance))
         bm_utils.unlink_without_raise(get_pxe_mac_path(
             node['prov_mac_address']))
@@ -464,7 +491,7 @@ class PXE(base.NodeDriver):
                 return result
             except Exception as e:
                 LOG.debug(_("Exception occurred during accessing to %s: %s")
-                            % (path, str(e)))
+                          % (path, str(e)))
                 return result
 
         def _replace_boot_config():
@@ -485,6 +512,8 @@ class PXE(base.NodeDriver):
                 read_file.close()
             write_file.close()
             shutil.copyfile(tmpname, pxe_config_file_path)
+            LOG.debug(_("shutil.copyfile(%s, %s)") %
+                      (tmpname, pxe_config_file_path))
             os.remove(tmpname)
 
         def _wait_for_deploy():
@@ -559,7 +588,7 @@ class PXE(base.NodeDriver):
                 return result
             except Exception as e:
                 LOG.debug(_("Error occurred during accessing to %s: %s")
-                            % (path, str(e)))
+                          % (path, str(e)))
                 return result
 
         def _wait_for_delete():
