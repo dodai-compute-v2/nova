@@ -434,3 +434,33 @@ def bm_interface_get_all_by_bm_node_id(context, bm_node_id):
         raise exception.NodeNotFound(node_id=bm_node_id)
 
     return result
+
+
+@sqlalchemy_api.require_admin_context
+def dodai_rsyncd_get_all_inuse_ports(context):
+    result = model_query(context, models.DodaiRsyncDaemons,
+                         read_deleted="no").all()
+    return result
+
+
+@sqlalchemy_api.require_admin_context
+def dodai_rsyncd_get_port_by_image_id(context, image_id):
+    result = model_query(context, models.DodaiRsyncDaemons,
+                         read_deleted="no").filter_by(image_id=image_id).\
+        first()
+    return result
+
+
+@sqlalchemy_api.require_admin_context
+def dodai_rsyncd_create(context, image_id, port):
+    ref = models.DodaiRsyncDaemons()
+    ref.image_id = image_id
+    ref.port = port
+    _save(ref)
+    return ref
+
+
+@sqlalchemy_api.require_admin_context
+def dodai_rsyncd_destroy(context, image_id):
+    model_query(context, models.DodaiRsyncDaemons, read_deleted="no").\
+        filter_by(image_id=image_id).delete()
