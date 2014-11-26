@@ -33,7 +33,7 @@ node_fields = ['id', 'uuid', 'cpus', 'local_gb', 'memory_mb', 'pm_address',
                'service_host', 'terminal_port', 'instance_uuid',
                'terminal_port', 'host_name', 'instance_type_id',
                'prov_ip_address', 'ipmi_interface', 'ipmitool_extra_option',
-               'kernel_append_params'
+               'kernel_append_params', 'task_state', 'resource_pool'
                ]
 
 interface_fields = ['id', 'address', 'datapath_id', 'port_no']
@@ -113,6 +113,7 @@ class BareMetalNodeController(wsgi.Controller):
             node = _node_dict(node_from_db)
             node['interfaces'] = [_interface_dict(i) for i in ifs]
             nodes.append(node)
+        LOG.debug("List Nodes")
         return {'nodes': nodes}
 
     @wsgi.serializers(xml=NodeTemplate)
@@ -129,6 +130,7 @@ class BareMetalNodeController(wsgi.Controller):
             ifs = []
         node = _node_dict(node)
         node['interfaces'] = [_interface_dict(i) for i in ifs]
+        LOG.debug("Show node information: uuid %s" % node['uuid'])
         return {'node': node}
 
     @wsgi.serializers(xml=NodeTemplate)
@@ -138,6 +140,7 @@ class BareMetalNodeController(wsgi.Controller):
         node = db.bm_node_create(context, body['node'])
         node = _node_dict(node)
         node['interfaces'] = []
+        LOG.debug("Create node: uuid %s" % node['uuid'])
         return {'node': node}
 
     def delete(self, req, id):
@@ -147,6 +150,7 @@ class BareMetalNodeController(wsgi.Controller):
             db.bm_node_destroy(context, id)
         except exception.NodeNotFound:
             raise webob.exc.HTTPNotFound
+        LOG.debug("Delete node: id %s" % id)
         return webob.Response(status_int=202)
 
     def _check_node_exists(self, context, node_id):
@@ -171,6 +175,9 @@ class BareMetalNodeController(wsgi.Controller):
                                        datapath_id=datapath_id,
                                        port_no=port_no)
         if_ref = db.bm_interface_get(context, if_id)
+        LOG.debug("Add interface: bm_node_id %s, address %s, "
+                  "datapath_id %s, port_no %s" %
+                  (bm_node_id, address, datapath_id, port_no))
         return {'interface': _interface_dict(if_ref)}
 
     @wsgi.response(202)
@@ -183,6 +190,7 @@ class BareMetalNodeController(wsgi.Controller):
         print "body(%s)" % body
         if_id = body.get('id')
         address = body.get('address')
+        LOG.debug("Remove interface: if_id %s, address %s" % (if_id, address))
         if not if_id and not address:
             raise webob.exc.HTTPBadRequest(
                     explanation=_("Must specify id or address"))
