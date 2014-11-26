@@ -267,7 +267,7 @@ class PXE(base.NodeDriver):
         fileutils.ensure_tree(CONF.baremetal.base_dir_path)
 
         LOG.debug(_("Fetching kernel and ramdisk for instance %s") %
-                  instance['name'])
+                  instance['uuid'])
         for label in image_info.keys():
             (uuid, path) = image_info[label]
             if not os.path.isfile(path):
@@ -295,8 +295,8 @@ class PXE(base.NodeDriver):
         fileutils.ensure_tree(get_image_dir_path(instance))
         image_path = get_image_file_path(instance)
 
-        LOG.debug(_("Fetching image %(ami)s for instance %(name)s") %
-                  {'ami': image_meta['id'], 'name': instance['name']})
+        LOG.debug(_("Fetching image %(ami)s for instance %(uuid)s") %
+                  {'ami': image_meta['id'], 'uuid': instance['uuid']})
         bm_utils.cache_image(context=context,
                              target=image_path,
                              image_id=image_meta['id'],
@@ -326,16 +326,17 @@ class PXE(base.NodeDriver):
             os.path.join(CONF.baremetal.tftp_root, instance['uuid']))
         tftp_image_info = get_tftp_image_info(instance, instance_type)
         # NOTE(yokose): image_ref is not necessary for delete
-        LOG.debug(_("del %s") % tftp_image_info['image_ref'])
+        LOG.debug(_("del %s, instance %s") % (tftp_image_info['image_ref'],
+                  instance['uuid']))
         del tftp_image_info['image_ref']
         self._cache_tftp_images(context, instance, tftp_image_info)
 
     def destroy_images(self, context, node, instance):
         """Delete instance's image file."""
-        LOG.debug(_("bm_utils.unlink_without_raise(%s)") %
-                  get_image_file_path(instance))
-        LOG.debug(_("bm_utils.rmtree_without_raise(%s)") %
-                  get_image_dir_path(instance))
+        LOG.debug(_("bm_utils.unlink_without_raise(%s), instance %s") %
+                  (get_image_file_path(instance), instance['uuid']))
+        LOG.debug(_("bm_utils.rmtree_without_raise(%s), instance %s") %
+                  (get_image_dir_path(instance), instance['uuid']))
         bm_utils.unlink_without_raise(get_image_file_path(instance))
         bm_utils.rmtree_without_raise(get_image_dir_path(instance))
 
@@ -374,14 +375,16 @@ class PXE(base.NodeDriver):
             node['host_name'],
             root_fs_type,
         )
-        LOG.debug(_("bm_utils.write_to_file(%s, %s)") %
-                  (pxe_config_file_path, pxe_config))
+        LOG.debug(_("bm_utils.write_to_file(%s, %s), instance %s") %
+                  (pxe_config_file_path, pxe_config, instance['uuid']))
         bm_utils.write_to_file(pxe_config_file_path, pxe_config)
 
         mac_path = get_pxe_mac_path(node['prov_mac_address'])
-        LOG.debug(_("bm_utils.unlink_without_raise(%s)") % mac_path)
-        LOG.debug(_("bm_utils.create_link_without_raise(%s, %s)") %
-                  (pxe_config_file_path, mac_path))
+        LOG.debug(_("bm_utils.unlink_without_raise(%s), instance %s") %
+                  (mac_path, instance['uuid']))
+        LOG.debug(_("bm_utils.create_link_without_raise(%s, %s), "
+                    "instance %s") %
+                  (pxe_config_file_path, mac_path, instance['uuid']))
         bm_utils.unlink_without_raise(mac_path)
         bm_utils.create_link_without_raise(pxe_config_file_path, mac_path)
 
@@ -409,14 +412,15 @@ class PXE(base.NodeDriver):
             root_fs_type,
             is_delete=True
         )
-        LOG.debug(_("bm_utils.write_to_file(%s, %s)") %
-                  (pxe_config_file_path, pxe_config))
+        LOG.debug(_("bm_utils.write_to_file(%s, %s), instance %s") %
+                  (pxe_config_file_path, pxe_config, instance['uuid']))
         bm_utils.write_to_file(pxe_config_file_path, pxe_config)
 
         mac_path = get_pxe_mac_path(node['prov_mac_address'])
-        LOG.debug(_("bm_utils.unlink_without_raise(%s)") % mac_path)
-        LOG.debug(_("bm_utils.create_link_without_raise(%s, %s)") %
-                  (pxe_config_file_path, mac_path))
+        LOG.debug(_("bm_utils.unlink_without_raise(%s), instance %s") %
+                  (mac_path, instance['uuid']))
+        LOG.debug(_("bm_utils.create_link_without_raise(%s, %s), instance %s")
+                  % (pxe_config_file_path, mac_path, instance['uuid']))
         bm_utils.unlink_without_raise(mac_path)
         bm_utils.create_link_without_raise(pxe_config_file_path, mac_path)
 
@@ -445,13 +449,15 @@ class PXE(base.NodeDriver):
         else:
             for label in image_info.keys():
                 (uuid, path) = image_info[label]
-                LOG.debug(_("bm_utils.unlink_without_raise(%s)") % path)
+                LOG.debug(_("bm_utils.unlink_without_raise(%s), instance %s")
+                          % (path, instance['uuid']))
                 bm_utils.unlink_without_raise(path)
 
-        LOG.debug(_("bm_utils.unlink_without_raise(%s)") %
-                  get_pxe_config_file_path(instance))
-        LOG.debug(_("bm_utils.unlink_without_raise(%s)") %
-                  get_pxe_mac_path(node['prov_mac_address']))
+        LOG.debug(_("bm_utils.unlink_without_raise(%s), instance %s") %
+                  (get_pxe_config_file_path(instance), instance['uuid']))
+        LOG.debug(_("bm_utils.unlink_without_raise(%s), instance %s") %
+                  (get_pxe_mac_path(node['prov_mac_address']),
+                   instance['uuid']))
         LOG.debug(_("bm_utils.rmtree_without_raise(%s)") %
                   os.path.join(CONF.baremetal.tftp_root, instance['uuid']))
         bm_utils.unlink_without_raise(get_pxe_config_file_path(instance))
@@ -490,13 +496,14 @@ class PXE(base.NodeDriver):
                     pass
                 return result
             except Exception as e:
-                LOG.debug(_("Exception occurred during accessing to %s: %s")
-                          % (path, str(e)))
+                LOG.debug(_("Exception occurred during accessing to %s, "
+                            "instance %s: %s")
+                          % (path, instance['uuid'], str(e)))
                 return result
 
         def _replace_boot_config():
             """Replace boot config"""
-            LOG.debug(_("replace boot config"))
+            LOG.debug(_("replace boot config: instance %s") % instance['uuid'])
             pxe_config_file_path = get_pxe_config_file_path(instance)
             tmpfd, tmpname = tempfile.mkstemp(dir=CONF.baremetal.tftp_root)
             write_file = os.fdopen(tmpfd, 'w')
@@ -512,14 +519,15 @@ class PXE(base.NodeDriver):
                 read_file.close()
             write_file.close()
             shutil.copyfile(tmpname, pxe_config_file_path)
-            LOG.debug(_("shutil.copyfile(%s, %s)") %
-                      (tmpname, pxe_config_file_path))
+            LOG.debug(_("shutil.copyfile(%s, %s), instance %s") %
+                      (tmpname, pxe_config_file_path, instance['uuid']))
             os.remove(tmpname)
 
         def _wait_for_deploy():
             """Called at an interval until the deployment completes."""
             state = _get_for_deploy_rest()
-            LOG.debug(_("_wait_for_deploy() state: %s") % state)
+            LOG.debug(_("_wait_for_deploy() state: %s, instance %s")
+                      % (state, instance['uuid']))
             if state is None:
                 LOG.info(_("wait until the PC to start for instance %s") %
                          instance['uuid'])
@@ -587,14 +595,16 @@ class PXE(base.NodeDriver):
                     pass
                 return result
             except Exception as e:
-                LOG.debug(_("Error occurred during accessing to %s: %s")
-                          % (path, str(e)))
+                LOG.debug(_("Error occurred during accessing to %s: %s,"
+                            " instance %s")
+                          % (path, str(e), instance['uuid']))
                 return result
 
         def _wait_for_delete():
             """Called at an interval until the delete completes."""
             state = _get_for_delete_rest()
-            LOG.debug(_("_wait_for_delete() state: %s") % state)
+            LOG.debug(_("_wait_for_delete() state: %s, instance %s")
+                      % (state, instance['uuid']))
             if state is None:
                 LOG.info(_("wait until the PC to start for instance %s") %
                          instance['uuid'])

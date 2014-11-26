@@ -156,7 +156,8 @@ def _instance_spawned_by_resource_pool_user(instance):
         roles = kc.users.list_roles(user_id, project_id)
         user = kc.users.get(user_id)
     except Exception as e:
-        LOG.warn(str(e))
+        LOG.warn("_instance_spawned_by_resource_pool_user(): instance %s, %s"
+                 % (instance['uuid'], str(e)))
         return False
 
     return ('admin' in [role.name for role in roles] and
@@ -345,7 +346,7 @@ class BareMetalDriver(driver.ComputeDriver):
             node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
         except exception.InstanceNotFound:
             LOG.warning(_("Destroy called on non-existing instance %s")
-                    % instance['uuid'])
+                        % instance['uuid'])
             return
 
         try:
@@ -578,7 +579,7 @@ class DodaiBareMetalDriver(BareMetalDriver):
             # recycle resource pool's instance
             LOG.info(_("Recycling resource pool's instance. "
                        "old_instance: %s, new_instance: %s") %
-                       (old_instance_uuid, instance['uuid']))
+                     (old_instance_uuid, instance['uuid']))
             db.bm_node_update(context, node['id'],
                               {'instance_uuid': instance['uuid'],
                                'instance_name': instance['hostname'],
@@ -596,15 +597,15 @@ class DodaiBareMetalDriver(BareMetalDriver):
                 with excutils.save_and_reraise_exception():
                     LOG.error(_("Error recycling instance %(instance)s "
                                 "on baremetal node %(node)s.") %
-                                {'instance': instance['uuid'],
-                                 'node': node['uuid']})
+                              {'instance': instance['uuid'],
+                               'node': node['uuid']})
                     _update_state(context, node, instance,
                                   baremetal_states.ERROR)
                     self._unplug_vifs(instance, network_info)
         else:
             LOG.info(_("Spawning brand-new instance. "
                        "old_instance: %s, new_instance: %s") %
-                       (old_instance_uuid, instance['uuid']))
+                     (old_instance_uuid, instance['uuid']))
             db.bm_node_update(context, node['id'],
                               {'instance_uuid': instance['uuid'],
                                'instance_name': instance['hostname'],
@@ -617,12 +618,12 @@ class DodaiBareMetalDriver(BareMetalDriver):
             try:
                 self._plug_vifs(instance, network_info, context=context)
                 self.driver.cache_images(
-                                context, node, instance,
-                                admin_password=admin_password,
-                                image_meta=image_meta,
-                                injected_files=injected_files,
-                                network_info=network_info,
-                            )
+                    context, node, instance,
+                    admin_password=admin_password,
+                    image_meta=image_meta,
+                    injected_files=injected_files,
+                    network_info=network_info,
+                )
                 self.driver.activate_bootloader(context, node, instance)
                 # reboot node
                 pm = get_power_manager(node=node, instance=instance)
@@ -640,8 +641,8 @@ class DodaiBareMetalDriver(BareMetalDriver):
                 with excutils.save_and_reraise_exception():
                     LOG.error(_("Error deploying instance %(instance)s "
                                 "on baremetal node %(node)s.") %
-                                {'instance': instance['uuid'],
-                                 'node': node['uuid']})
+                              {'instance': instance['uuid'],
+                               'node': node['uuid']})
 
                     # Do not set instance=None yet. This prevents another
                     # spawn() while we are cleaning up.
@@ -667,7 +668,7 @@ class DodaiBareMetalDriver(BareMetalDriver):
             node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
         except exception.InstanceNotFound:
             LOG.warning(_("Destroy called on non-existing instance %s")
-                    % instance['uuid'])
+                        % instance['uuid'])
             return
 
         try:
@@ -691,18 +692,20 @@ class DodaiBareMetalDriver(BareMetalDriver):
             with excutils.save_and_reraise_exception():
                 try:
                     LOG.error(_("Error from baremetal driver "
-                                "during destroy: %s") % e)
+                                "during destroy: %s, instance %s")
+                              % (e, instance['uuid']))
                     _update_state(context, node, instance,
                                   baremetal_states.ERROR)
                 except Exception:
                     LOG.error(_("Error while recording destroy failure in "
-                                "baremetal database: %s") % e)
+                                "baremetal database: %s, instance %s")
+                              % (e, instance['uuid']))
 
     def _cleanup_old_instance(self, context, instance_uuid):
         CONF.import_opt('compute_manager', 'nova.service')
         compute = importutils.import_object(CONF.compute_manager)
         compute._cleanup_instance_unassociated_with_node(
-                context, instance_uuid)
+            context, instance_uuid)
 
     def _put_keypair(self, node, instance):
         headers = {'Content-type': 'application/json', 'Accept': '*/*'}
@@ -711,23 +714,29 @@ class DodaiBareMetalDriver(BareMetalDriver):
         path = "http://%s:%s/services/dodai-instance/key"\
                % (target_ip, target_port)
         body = jsonutils.dumps({'public_key': instance['key_data']})
-        LOG.debug("Put keypair path:%s" % path)
-        LOG.debug("Put keypair body:%s" % body)
+        LOG.debug("Put keypair path:%s, instance %s"
+                  % (path, instance['uuid']))
+        LOG.debug("Put keypair body:%s, instance %s"
+                  % (body, instance['uuid']))
         http = httplib2.Http()
         response, content = http.request(path, 'PUT',
                                          body=body, headers=headers)
-        LOG.debug("Put keypair status:%d" % response.status)
-        LOG.debug("Put keypair content:%s" % content)
+        LOG.debug("Put keypair status:%d, instance %s"
+                  % (response.status, instance['uuid']))
+        LOG.debug("Put keypair content:%s, instance %s"
+                  % (content, instance['uuid']))
         if response.status >= 400:
-            msg = _("Failed to put keypair. path=%s, status=%d")\
-                      % (path, response.status)
+            msg = _("Failed to put keypair. path=%s, status=%d, instance %s")\
+                % (path, response.status, instance['uuid'])
             LOG.error(msg)
             raise Exception(msg)
 
     def _set_fixed_ip(self, node, network_info):
-        LOG.debug("#network_info=%s" % network_info)
+        LOG.debug("#network_info=%s, instance %s"
+                  % (network_info, node['instance_uuid']))
         if not network_info:
-            LOG.debug("network_info is not set. _set_fixed_ip is skipped.")
+            LOG.debug("network_info is not set. _set_fixed_ip is skipped."
+                      " instance %s" % node['instance_uuid'])
             return
         headers = {'Content-type': 'application/json', 'Accept': '*/*'}
         target_ip = node['prov_ip_address']
@@ -744,23 +753,29 @@ class DodaiBareMetalDriver(BareMetalDriver):
                                          in fixed_ip['dns']]}
             ip_objs[METAKEY_FIXED_IP_PREFIX + str(i + 1)] = ip_obj
         body = jsonutils.dumps(ip_objs)
-        LOG.debug("Set FixedIp path:%s" % path)
-        LOG.debug("Set FixedIp body:%s" % body)
+        LOG.debug("Set FixedIp path:%s, instance %s"
+                  % (path, node['instance_uuid']))
+        LOG.debug("Set FixedIp body:%s, instance %s"
+                  % (body, node['instance_uuid']))
         http = httplib2.Http()
         response, content = http.request(path, 'PUT',
                                          body=body, headers=headers)
-        LOG.debug("Set FixedIP status:%d" % response.status)
-        LOG.debug("Set FixedIP content:%s" % content)
+        LOG.debug("Set FixedIP status:%d, instance %s"
+                  % (response.status, node['instance_uuid']))
+        LOG.debug("Set FixedIP content:%s, instance %s"
+                  % (content, node['instance_uuid']))
         if response.status >= 400:
-            msg = _("Failed to set FixedIP. path=%s, status=%d")\
-                      % (path, response.status)
+            msg = _("Failed to set FixedIP. path=%s, status=%d, "
+                    "instance %s")\
+                % (path, response.status, node['instance_uuid'])
             LOG.error(msg)
             raise Exception(msg)
 
     def change_instance_metadata(self, context, instance, diff):
-        LOG.debug("#DodaiBareMetalDriver.change_instance_metadata() called.")
+        LOG.debug("#DodaiBareMetalDriver.change_instance_metadata() called."
+                  ", instance %s" % instance['uuid'])
         LOG.debug("#instance=%s" % instance)
-        LOG.debug("#diff=%s" % diff)
+        LOG.debug("#diff=%s, instance %s" % (diff, instance['uuid']))
         node = _get_baremetal_node_by_instance_uuid(instance['uuid'])
         # NOTE(yokose): Only 'floating_ip_x' key is accepted.
         for key in diff.keys():
@@ -782,32 +797,39 @@ class DodaiBareMetalDriver(BareMetalDriver):
                     body = None
                 else:
                     continue
-                LOG.debug("#path=%s" % path)
-                LOG.debug("#method=%s" % method)
-                LOG.debug("#body=%s" % body)
+                LOG.debug("#path=%s, instance %s" % (path, instance['uuid']))
+                LOG.debug("#method=%s, instance %s"
+                          % (method, instance['uuid']))
+                LOG.debug("#body=%s, instance %s" % (body, instance['uuid']))
                 http = httplib2.Http()
                 response, content = http.request(path, method,
                                                  body=body, headers=headers)
                 if response.status >= 400:
-                    msg = _("Failed to change metadata. path=%s, status=%d")\
-                              % (path, response.status)
+                    msg = _("Failed to change metadata. path=%s, status=%d"
+                            ", instance %s")\
+                        % (path, response.status, instance['uuid'])
                     LOG.error(msg)
                     raise Exception(msg)
                 else:
-                    LOG.info(_("Change metadata completed successfully"))
+                    LOG.info(_("Change metadata completed successfully, "
+                               "instance %s") % instance['uuid'])
         else:
-            LOG.warn(_("Metadata doesn't include floating_ip_x key. keys=%s")\
-                         % diff.keys())
+            LOG.warn(_("Metadata doesn't include floating_ip_x key. keys=%s"
+                       ", instance %s")
+                     % (diff.keys(), instance['uuid']))
 
     def get_available_nodes(self):
         context = nova_context.get_admin_context()
         unassociated_nodes = [str(n['uuid']) for n in
-                db.bm_node_get_unassociated(context, service_host=CONF.host)]
+                              db.bm_node_get_unassociated(
+                                  context, service_host=CONF.host)]
         # NOTE(yokose): add nodes in resource pool and
         #               deleted node(candidate for resource pool)
         resource_pool_nodes = [str(n['uuid']) for n in
-                db.bm_node_get_associated(context, service_host=CONF.host)
-                if ((n['resource_pool']
-                        and n['task_state'] == baremetal_states.ACTIVE)
-                    or n['task_state'] == baremetal_states.DELETED)]
+                               db.bm_node_get_associated(
+                                   context, service_host=CONF.host)
+                               if ((n['resource_pool'] and
+                                    n['task_state'] == baremetal_states.ACTIVE)
+                                   or n['task_state'] ==
+                                   baremetal_states.DELETED)]
         return unassociated_nodes + resource_pool_nodes
