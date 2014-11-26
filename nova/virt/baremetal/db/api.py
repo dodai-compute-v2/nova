@@ -184,3 +184,19 @@ def bm_interface_get_by_vif_uuid(context, vif_uuid):
 
 def bm_interface_get_all_by_bm_node_id(context, bm_node_id):
     return IMPL.bm_interface_get_all_by_bm_node_id(context, bm_node_id)
+
+
+def dodai_rsyncd_get_all_inuse_ports(context):
+    return IMPL.dodai_rsyncd_get_all_inuse_ports(context)
+
+
+def dodai_rsyncd_get_port_by_image_id(context, image_id):
+    return IMPL.dodai_rsyncd_get_port_by_image_id(context, image_id)
+
+
+def dodai_rsyncd_create(context, image_id, port):
+    return IMPL.dodai_rsyncd_create(context, image_id, port)
+
+
+def dodai_rsyncd_destroy(context, image_id):
+    return IMPL.dodai_rsyncd_destroy(context, image_id)

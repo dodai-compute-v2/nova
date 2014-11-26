@@ -94,10 +94,23 @@ def upgrade(migrate_engine):
         #mysql_charset='utf8'
     )
 
+    dodai_rsync_daemons = Table('dodai_rsync_daemons', meta,
+        Column('created_at', DateTime),
+        Column('updated_at', DateTime),
+        Column('deleted_at', DateTime),
+        Column('deleted', Boolean),
+        Column('id', Integer, primary_key=True, nullable=False),
+        Column('image_id', String(length=255)),
+        Column('port', Integer),
+        mysql_engine='InnoDB',
+        #mysql_charset='utf8'
+    )
+
     bm_nodes.create()
     bm_interfaces.create()
     bm_pxe_ips.create()
     bm_deployments.create()
+    dodai_rsync_daemons.create()
 
     Index('idx_bm_nodes_service_host_deleted',
           bm_nodes.c.service_host, bm_nodes.c.deleted)\

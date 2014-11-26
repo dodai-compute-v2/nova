@@ -83,3 +83,11 @@ class BareMetalInterface(BASE, models.NovaBase):
     datapath_id = Column(String(255))
     port_no = Column(Integer)
     vif_uuid = Column(String(36), unique=True)
+
+
+class DodaiRsyncDaemons(BASE, models.NovaBase):
+    __tablename__ = 'dodai_rsync_daemons'
+    id = Column(Integer, primary_key=True)
+    deleted = Column(Boolean, default=False)
+    image_id = Column(String(255), unique=True)
+    port = Column(Integer, unique=True)

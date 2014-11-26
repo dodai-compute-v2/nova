@@ -22,15 +22,17 @@ import os
 import tempfile
 import shutil
 import commands
-import socket
+import re
 
 from oslo.config import cfg
 
+from nova import context
 from nova import exception
 from nova.openstack.common import fileutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import lockutils
 from nova import utils
+from nova.virt.baremetal import db
 from nova.virt.baremetal import utils as bm_utils
 
 pxe_opts = [
@@ -55,6 +57,9 @@ pxe_opts = [
                help='Template file for rsync configuration'),
     cfg.StrOpt('rsync_ip',
                help='rsync ip for rsync configuration'),
+    cfg.StrOpt('rsync_port_range',
+               default='14606-16606',
+               help='port range for rsync daemon'),
 ]
 
 LOG = logging.getLogger(__name__)
@@ -116,7 +121,6 @@ def get_rsync_pid_file_path(image_id):
 
 class DodaiOSInstallManager(object):
     """Install OS to Baremetal machine by Dodai style"""
-    tcp_port_by_uuid = []
     config_allow = 'hosts allow'
 
     def prep_os_install_manager(self, image_id, prov_ip_address):
@@ -136,6 +140,7 @@ class DodaiOSInstallManager(object):
         """Start the rsyncd"""
         LOG.debug("_launch_rsyncd start. image_id=%s, allow_host=%s"
                   % (image_id, allow_host))
+        ctx = context.get_admin_context()
         if not os.path.isdir(CONF.baremetal.rsync_conf_path):
             fileutils.ensure_tree(CONF.baremetal.rsync_conf_path)
         if not os.path.isdir(CONF.baremetal.rsync_pid_path):
@@ -170,24 +175,44 @@ class DodaiOSInstallManager(object):
                 allow_host,
             )
             bm_utils.write_to_file(rsync_config_file_path, rsync_config)
-            tcp_port = self._get_available_port()
-            try:
-                self.tcp_port_by_uuid.append([image_id, tcp_port])
-            except AttributeError:
-                self.tcp_port_by_uuid = [[image_id, tcp_port]]
+            port_min, port_max = re.split('[,-]',
+                                          CONF.baremetal.rsync_port_range)
+            LOG.debug("_launch_rsyncd: rsync_port_range %s"
+                      % CONF.baremetal.rsync_port_range)
+            LOG.debug("_launch_rsyncd: port_min %s" % port_min)
+            LOG.debug("_launch_rsyncd: port_max %s" % port_max)
+            records = db.dodai_rsyncd_get_all_inuse_ports(ctx)
+            inuse_ports = set(int(record['port']) for record in records)
+            LOG.debug("_launch_rsyncd: inuse_ports %s" % inuse_ports)
+            port_range = range(int(port_min), int(port_max) + 1)
+            available_ports = list(set(port_range) - inuse_ports)
+            if 0 == len(available_ports):
+                LOG.error("_launch_rsyncd: There is no available port.")
+                raise BaseException
+            else:
+                port = available_ports[0]
 
+            LOG.debug("_launch_rsyncd: port %s" % port)
+            db.dodai_rsyncd_create(ctx, image_id, port)
             utils.execute('rsync', '--daemon', '--config',
                           rsync_config_file_path, '--port',
-                          str(tcp_port), run_as_root=True)
+                          str(port), run_as_root=True)
         else:
             LOG.debug("_launch_rsyncd: rsync_config_file %s exists."
                       % rsync_config_file_path)
             self._add_allow_host(image_id, allow_host)
-            tcp_port = self._get_tcp_port_by_image_id(image_id)
-            base_image_file_path = get_base_image_file_path(image_id)
+            result = db.dodai_rsyncd_get_port_by_image_id(ctx, image_id)
+            if result:
+                port = result['port']
+                LOG.debug("_launch_rsyncd: port %s" % port)
+                base_image_file_path = get_base_image_file_path(image_id)
+            else:
+                LOG.error("_launch_rsyncd: Cannot find port about %s."
+                          % rsync_config_file_path)
+                raise BaseException
 
         rsync_url = "rsync://%s:%s/%s" %\
-                    (CONF.baremetal.rsync_ip, tcp_port, image_id)
+                    (CONF.baremetal.rsync_ip, port, image_id)
         LOG.debug("_launch_rsyncd end. image_id=%s, allow_host=%s"
                   % (image_id, allow_host))
         return rsync_url
@@ -211,10 +236,13 @@ class DodaiOSInstallManager(object):
         if 0 < len(self._list_allow_host(image_id)):
             LOG.debug(_("_kill_rsyncd abort"))
             return
+        ctx = context.get_admin_context()
+        db.dodai_rsyncd_destroy(ctx, image_id)
         rsync_pid_file_path = get_rsync_pid_file_path(image_id)
         with open(rsync_pid_file_path) as rsync_pid:
             pid = rsync_pid.read().strip()
-        utils.execute('kill', '-9', pid, run_as_root=True)
+        LOG.debug("_kill_rsyncd: kill -SIGTERM %s" % pid)
+        utils.execute('kill', '-SIGTERM', pid, run_as_root=True)
         if os.path.isfile(rsync_config_file_path):
             os.remove(rsync_config_file_path)
         if os.path.isfile(rsync_pid_file_path):
@@ -301,24 +329,3 @@ class DodaiOSInstallManager(object):
             rsync_conf.write(new_config)
         LOG.debug("_remove_allow_host end. image_id=%s, allow_host=%s"
                   % (image_id, allow_host))
-
-    def _get_tcp_port_by_image_id(self, image_id):
-        """Return the port number that is using the machine image"""
-        LOG.debug("#DodaiOSInstallManager._get_tcp_port_by_image_id() called.")
-        port_no = commands.getoutput("ps auxww | grep %s | grep -v grep "
-                                     "| awk '{print $16}'" % image_id)
-        LOG.debug("#port_no=%s" % port_no)
-        try:
-            port_no = int(port_no)
-        except ValueError:
-            reason = _("Could not get the valid port number from image id. "
-                       "port_no=%s, image_id=%s") % (port_no, image_id)
-            raise exception.InstanceDeployFailure(reason=reason)
-        return port_no
-
-    def _get_available_port(self):
-        sock = socket.socket()
-        sock.bind(("localhost", 0))
-        port_number = sock.getsockname()[1]
-        sock.close()
-        return port_number
