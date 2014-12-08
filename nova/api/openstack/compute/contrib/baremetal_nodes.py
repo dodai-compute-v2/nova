@@ -177,7 +177,7 @@ class BareMetalNodeController(wsgi.Controller):
         if_ref = db.bm_interface_get(context, if_id)
         LOG.debug("Add interface: bm_node_id %s, address %s, "
                   "datapath_id %s, port_no %s" %
-                  (bm_node_id, address, datapath_id, port_no))
+                  (id, address, datapath_id, port_no))
         return {'interface': _interface_dict(if_ref)}
 
     @wsgi.response(202)
