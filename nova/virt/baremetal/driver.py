@@ -671,7 +671,16 @@ class DodaiBareMetalDriver(BareMetalDriver):
                         % instance['uuid'])
             return
 
+        if node['task_state'] in {baremetal_states.DELETING,
+                                  baremetal_states.DELETEFAIL,
+                                  baremetal_states.DELETEDONE,
+                                  baremetal_states.DELETED}:
+            LOG.debug("instance %s is already in %s"
+                      % (instance['uuid'], node['task_state']))
+            return
+
         try:
+            _update_state(context, node, instance, baremetal_states.DELETING)
             # pxe boot for delete
             self.driver.cache_images_for_delete(context, instance)
             self.driver.activate_bootloader_for_delete(context, node, instance)
