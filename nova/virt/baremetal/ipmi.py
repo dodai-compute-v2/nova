@@ -345,3 +345,66 @@ class DodaiIPMI(IPMI):
         self.retries = 0
         timer = utils.FixedIntervalLoopingCall(_wait_for_power_off)
         timer.start(interval=CONF.baremetal.ipmi_power_interval).wait()
+
+    def state_console(self):
+        if not self.port:
+            return
+        console_pid = _get_console_pid(self.node_id)
+        if console_pid:
+            try:
+                with open("/proc/%s/cmdline" % console_pid, "r") as f:
+                    cmdline = f.read()
+                if cmdline.startswith(CONF.baremetal.terminal):
+                    return True
+                else:
+                    return False
+            except Exception:
+                LOG.debug("Proccess %s does not exist")
+                return False
+
+    def start_console(self):
+        if not self.port:
+            return
+        args = []
+        args.append(CONF.baremetal.terminal)
+        if CONF.baremetal.terminal_cert_dir:
+            args.append("-c")
+            args.append(CONF.baremetal.terminal_cert_dir)
+        else:
+            args.append("-t")
+        args.append("-p")
+        args.append(str(self.port))
+        args.append("--background=%s" % _get_console_pid_path(self.node_id))
+        args.append("-s")
+
+        pwfile = os.path.join(CONF.baremetal.ipmitool_pwfile_dir,
+                              str(self.node_id))
+        with open(pwfile, "w") as f:
+            f.write(self.password)
+
+        ipmi_args = "/:%(uid)s:%(gid)s:HOME:ipmitool -H %(address)s" \
+                    " -I lanplus -U %(user)s -f %(pwfile)s sol activate" \
+                    % {'uid': os.getuid(),
+                       'gid': os.getgid(),
+                       'address': self.address,
+                       'user': self.user,
+                       'pwfile': pwfile,
+                       }
+
+        args.append(ipmi_args)
+        # Run shellinaboxd without pipes. Otherwise utils.execute() waits
+        # infinitely since shellinaboxd does not close passed fds.
+        x = ["'" + arg.replace("'", "'\\''") + "'" for arg in args]
+        x.append('</dev/null')
+        x.append('>/dev/null')
+        x.append('2>&1')
+        utils.execute(' '.join(x), shell=True)
+
+    def stop_console(self):
+        console_pid = _get_console_pid(self.node_id)
+        if console_pid:
+            # Allow exitcode 99 (RC_UNAUTHORIZED)
+            utils.execute('kill', '-TERM', str(console_pid),
+                          run_as_root=True,
+                          check_exit_code=[0, 99])
+        bm_utils.unlink_without_raise(_get_console_pid_path(self.node_id))

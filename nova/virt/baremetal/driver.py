@@ -690,6 +690,7 @@ class DodaiBareMetalDriver(BareMetalDriver):
             self.driver.deactivate_node_for_delete(context, node, instance)
             # reboot node
             pm.reboot_node()
+            pm.stop_console
 
             self.driver.deactivate_bootloader(context, node, instance)
             self.driver.destroy_images(context, node, instance)
@@ -842,3 +843,19 @@ class DodaiBareMetalDriver(BareMetalDriver):
                                    or n['task_state'] ==
                                    baremetal_states.DELETED)]
         return unassociated_nodes + resource_pool_nodes
+
+    def get_vnc_console(self, instance):
+        context = nova_context.get_admin_context()
+        node_uuid = self._require_node(instance)
+        node = db.bm_node_get_by_node_uuid(context, node_uuid)
+        pm = get_power_manager(node=node, instance=instance)
+        if not pm.state_console:
+            pm.start_console
+        port = node['terminal_port']
+        host = CONF.vncserver_proxyclient_address
+        internal_access_path = "http://%s:%s" % (host, port)
+        LOG.debug(_("get_vnc_console: host=%s, port=%s, "
+                    "internal_access_path=%s")
+                  % (host, port, internal_access_path))
+        return {'host': host, 'port': port,
+                'internal_access_path': internal_access_path}
