@@ -52,6 +52,9 @@ opts = [
     cfg.IntOpt('ipmi_power_interval',
                default=5,
                help='Interval to wait for the next IPMI operations'),
+    cfg.StrOpt('ipmitool_pwfile_dir',
+               default=paths.state_path_def('baremetal/console'),
+               help='path to directory stores pwfile of ipmi'),
     ]
 
 baremetal_group = cfg.OptGroup(name='baremetal',
@@ -401,10 +404,15 @@ class DodaiIPMI(IPMI):
         utils.execute(' '.join(x), shell=True)
 
     def stop_console(self):
-        console_pid = _get_console_pid(self.node_id)
-        if console_pid:
-            # Allow exitcode 99 (RC_UNAUTHORIZED)
-            utils.execute('kill', '-TERM', str(console_pid),
-                          run_as_root=True,
-                          check_exit_code=[0, 99])
-        bm_utils.unlink_without_raise(_get_console_pid_path(self.node_id))
+        try:
+            console_pid = _get_console_pid(self.node_id)
+            if console_pid:
+                # Allow exitcode 99 (RC_UNAUTHORIZED)
+                utils.execute('kill', '-TERM', str(console_pid),
+                              run_as_root=True,
+                              check_exit_code=[0, 99])
+            bm_utils.unlink_without_raise(_get_console_pid_path(self.node_id))
+        finally:
+            pwfile = os.path.join(CONF.baremetal.ipmitool_pwfile_dir,
+                                  str(self.node_id))
+            bm_utils.unlink_without_raise(pwfile)
